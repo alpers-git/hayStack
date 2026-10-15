@@ -43,6 +43,13 @@ namespace hs {
     const std::string// BNDataType
     texelFormat;
     vec3f gridOrigin, gridSpacing;
+
+    /*! if non-empty, this volume is not to be volume-rendered at all;
+        instead we build one ray-traced iso-surface per value in here,
+        directly on the GPU-side scalar field (no marching-cubes
+        extraction, no mesh). All of them share 'isoColor'. */
+    std::vector<float> isoValues;
+    vec3f isoColor { 1.f, 0.f, 0.f };
   };
 
   inline size_t sizeOf(const std::string &type)

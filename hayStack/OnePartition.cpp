@@ -50,6 +50,11 @@ namespace hs {
         bounds.scalars.extend((const range1f&)sr);
       }
     }
+    for (auto &g : orbGrids)
+      if (g) {
+        bounds.spatial.extend(g->bounds);
+        bounds.scalars.extend(g->valueRange);
+      }
     for (auto &sphereSet : sphereSets)
       if (sphereSet)
         bounds.spatial.extend(sphereSet->getBounds());

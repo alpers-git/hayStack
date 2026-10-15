@@ -52,6 +52,12 @@ namespace hm {
     void setCamera(const hs::Camera &camera);
     
     void setTransferFunction(const TransferFunction &xf);
+
+    /*! re-set the iso-value of every iso-surface created from a
+        'gpuIso=' volume, in the order they were created. Values
+        beyond the number of surfaces we have are ignored. */
+    void setIsoValues(const std::vector<float> &values);
+    void setChannelFilter(const hs::ChannelFilter &filter);
       
     // void renderAll();
     void renderMiniScene(mini::Scene::SP miniScene);
@@ -87,13 +93,23 @@ namespace hm {
     
     anari::Group createGroup(const std::vector<anari::Surface> &geoms,
                              const std::vector<anari::Volume>  &volumes);
-    anari::Volume create(const hs::StructuredVolume &vol);
+    /*! returns either a volume (the regular case) or, if the volume
+        asked for iso-surfaces, a list of iso-surface surfaces */
+    std::pair<anari::Volume,std::vector<anari::Surface>>
+    create(const hs::StructuredVolume &vol);
     anari::Volume create(const hs::NanoVDBVolume &vol);
     std::pair<anari::Volume,std::vector<anari::Surface>>
     create(const hs::TAMRVolume &input);
     
     anari::Volume
     create(const std::pair<umesh::UMesh::SP,box3f> &meshAndDomain);
+    /*! the orbital-current field on a dense grid: per-channel voxel vectors
+      plus the enabled-channel mask */
+    anari::Volume create(const hs::OrbGridVolume::SP &orb);
+
+    /*! the orbGrid spatial fields we created, so a channel toggle can be
+        pushed without rebuilding the scene */
+    std::vector<anari::SpatialField> orbGridFields;
 
     using Surfaces = std::vector<anari::Surface>;
     Surfaces create(const hs::SphereSet &content);
@@ -146,6 +162,10 @@ namespace hm {
 
     bool dirty = true;
     vec2i fbSize { -1,-1 };
+
+    /*! every iso-surface geometry we created, in creation order, so
+        the UI can re-set their iso-values at runtime */
+    std::vector<anari::Geometry> isoGeoms;
 
     struct {
       anari::Device device;

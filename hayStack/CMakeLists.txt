@@ -40,6 +40,8 @@ set(LOADER_SOURCES
   loader/BoxesFromFile.cpp
   loader/CylindersFromFile.h
   loader/CylindersFromFile.cpp
+  loader/OrbGridFromFile.h
+  loader/OrbGridFromFile.cpp
   loader/Capsules.h
   loader/Capsules.cpp
   loader/TSTris.h
@@ -133,6 +135,7 @@ add_library(hayStack
   StructuredVolume.cpp
   TAMRVolume.h
   TAMRVolume.cpp
+  OrbGridVolume.h
   ColorMap.h
   ColorMap.cpp
 

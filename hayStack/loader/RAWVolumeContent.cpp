@@ -24,14 +24,18 @@ namespace hs {
                                        vec3i fullVolumeDims,
                                        const std::string &texelFormat,
                                        int numChannels,
-                                       float isoValue)
+                                       float isoValue,
+                                       const std::vector<float> &gpuIsoValues,
+                                       const vec3f &isoColor)
       : fileName(fileName),
         thisPartID(thisPartID),
         cellRange(cellRange),
         fullVolumeDims(fullVolumeDims),
         texelFormat(texelFormat),
         numChannels(numChannels),
-        isoValue(isoValue)
+        isoValue(isoValue),
+        gpuIsoValues(gpuIsoValues),
+        isoColor(isoColor)
     {}
 
     void splitKDTree(std::vector<box3i> &regions,
@@ -69,6 +73,26 @@ namespace hs {
                   const std::string &needle)
     { return contains(hayStack.where,needle); }
   
+    /* 'gpuIso' is the ray-traced variant of 'iso': rather than
+       running marching cubes on the host and handing down a triangle
+       mesh, this keeps the scalar field on the device and asks the
+       backend for an iso-surface *geometry* on it. Comma separate for
+       several surfaces. */
+    std::vector<float> parseGpuIsoValues(const ResourceSpecifier &dataURL)
+    {
+      std::vector<float> values;
+      std::string s = dataURL.get("gpuIso");
+      for (size_t pos = 0; pos < s.size(); ) {
+        size_t comma = s.find(',',pos);
+        if (comma == std::string::npos) comma = s.size();
+        std::string tok = s.substr(pos,comma-pos);
+        if (!tok.empty())
+          values.push_back(std::stof(tok));
+        pos = comma+1;
+      }
+      return values;
+    }
+
     void RAWVolumeContent::create(DataLoader *loader,
                                   const ResourceSpecifier &dataURL)
     {
@@ -158,13 +182,43 @@ namespace hs {
       std::string isoString = dataURL.get("iso",dataURL.get("isoValue"));
       if (!isoString.empty())
         isoValue = std::stof(isoString);
-    
+
+      std::vector<float> gpuIsoValues = parseGpuIsoValues(dataURL);
+      vec3f isoColor = dataURL.get_vec3f("isoColor",vec3f(1.f,0.f,0.f));
+
       for (int i=0;i<dataURL.numParts;i++) {
-        loader->addContent(new RAWVolumeContent(dataURL.where,i,
+        RAWVolumeContent *c = new RAWVolumeContent(dataURL.where,i,
                                                 regions[i],
                                                 dims,texelFormat,//scalarType,
                                                 numChannels,
-                                                isoValue));
+                                                isoValue,
+                                                gpuIsoValues,
+                                                isoColor);
+        /* optional world placement; see RAWVolumeContent.h */
+        {
+          const std::string o  = dataURL.get("gridOrigin","");
+          const std::string sp = dataURL.get("gridSpacing","");
+          vec3f vo(0.f), vs(1.f);
+          if (!o.empty()) {
+            if (sscanf(o.c_str(),"%f,%f,%f",&vo.x,&vo.y,&vo.z) != 3)
+              throw std::runtime_error("could not parse gridOrigin '"+o+"'");
+            c->havePlacement = true;
+          }
+          if (!sp.empty()) {
+            if (sscanf(sp.c_str(),"%f,%f,%f",&vs.x,&vs.y,&vs.z) != 3) {
+              if (sscanf(sp.c_str(),"%f",&vs.x) != 1)
+                throw std::runtime_error("could not parse gridSpacing '"+sp+"'");
+              vs = vec3f(vs.x);
+            }
+            c->havePlacement = true;
+          }
+          if (c->havePlacement) {
+            c->gridOriginOpt = vo; c->gridSpacingOpt = vs;
+            std::cout << "#hs.raw: placing grid at origin " << vo
+                      << " spacing " << vs << std::endl;
+          }
+        }
+        loader->addContent(c);
       }
     }
   
@@ -234,7 +288,11 @@ namespace hs {
         }
       vec3f gridOrigin(cellRange.lower);
       vec3f gridSpacing(1.f);
-    
+      if (havePlacement) {
+        gridOrigin  = gridOriginOpt + vec3f(cellRange.lower)*gridSpacingOpt;
+        gridSpacing = gridSpacingOpt;
+      }
+
       bool doIso = !isnan(isoValue);
       if (doIso) {
         umesh::UMesh::SP
@@ -310,9 +368,12 @@ namespace hs {
         if (!mesh->indices.empty())
           dataGroup.minis.push_back(model);
       } else {
-        dataGroup.structuredVolumes.push_back
-          (std::make_shared<StructuredVolume>(numVoxels,texelFormat,rawData,rawDataRGB,
-                                              gridOrigin,gridSpacing));
+        auto volume
+          = std::make_shared<StructuredVolume>(numVoxels,texelFormat,rawData,rawDataRGB,
+                                               gridOrigin,gridSpacing);
+        volume->isoValues = gpuIsoValues;
+        volume->isoColor  = isoColor;
+        dataGroup.structuredVolumes.push_back(volume);
       }
     }
   

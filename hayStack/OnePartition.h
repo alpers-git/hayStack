@@ -12,6 +12,7 @@
 #include "hayStack/Capsules.h"
 #include "hayStack/StructuredVolume.h"
 #include "hayStack/TAMRVolume.h"
+#include "hayStack/OrbGridVolume.h"
 #include "hayStack/NanoVDBVolume.h"
 #include <miniScene/Scene.h>
 #include <umesh/UMesh.h>
@@ -74,6 +75,9 @@ namespace hs {
     std::vector<NanoVDBVolume::SP>    nanovdbVolumes;
 #endif
     std::vector<TAMRVolume::SP>       amr;
+    /*! orbital-current fields on a dense grid, one vector per channel per
+        voxel */
+    std::vector<OrbGridVolume::SP>    orbGrids;
     
     const int partitionsRank;
     const int partitionsCount;

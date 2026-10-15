@@ -217,6 +217,18 @@ namespace hm {
       dev->setTransferFunction(xf);
   }
   
+  void HayMaker::setIsoValues(const std::vector<float> &values)
+  {
+    for (auto dev : perDevice)
+      dev->setIsoValues(values);
+  }
+  
+  void HayMaker::setChannelFilter(const hs::ChannelFilter &filter)
+  {
+    for (auto dev : perDevice)
+      dev->setChannelFilter(filter);
+  }
+  
   void HayMaker::setVolumeScatterSettings(const hs::VolumeScatterSettings &settings)
   {
     for (auto dev : perDevice)

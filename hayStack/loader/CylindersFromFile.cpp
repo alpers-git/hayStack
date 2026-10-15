@@ -307,12 +307,12 @@ namespace hs {
       cyls->vertices = withHeader::loadVectorOf<vec3f>(in);
       cyls->radii = withHeader::loadVectorOf<float>(in);
       cyls->colors = withHeader::loadVectorOf<vec3f>(in);
-      // cyls->material = mini::Matte::create();
       if (!cyls->material) {
-        DisneyMaterial::SP mat = std::make_shared<DisneyMaterial>();
-        mat->baseColor = .5f;
-        mat->metallic = .8f;
-        mat->roughness = .1f;
+        /* matte, to match SpheresFromFile: a molecular scene draws bonds and
+           atoms as one object, so a metallic/glossy default here made the
+           bonds read as chrome tubes next to diffuse spheres. */
+        mini::Matte::SP mat = std::make_shared<mini::Matte>();
+        mat->reflectance = .5f;
         cyls->material = mat;
       }
       if (data.numParts > 1)

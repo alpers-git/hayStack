@@ -28,7 +28,8 @@ namespace hm {
 #if HS_USE_MULTI_SCATTERING
      SET_VOLUME_SCATTER,
 #endif
-     // SET_ISO,
+     SET_ISO,
+     SET_CHANNEL_FILTER,
      MAX_VALID_COMMANDS
     } CommandTag;
   const char *commandNames[]
@@ -44,6 +45,8 @@ namespace hm {
 #if HS_USE_MULTI_SCATTERING
      "SET_VOLUME_SCATTER",
 #endif
+     "SET_ISO",
+     "SET_CHANNEL_FILTER",
   };
 
   
@@ -59,6 +62,8 @@ namespace hm {
 #if HS_USE_MULTI_SCATTERING
                            "set_volume_scatter",
 #endif
+                           "set_iso",
+                           "set_channel_filter",
                            "<EOL>" };
                            
   
@@ -99,6 +104,7 @@ namespace hm {
     void cmd_setVolumeScatterSettings();
 #endif
     void cmd_setISO();
+    void cmd_setChannelFilter();
     void cmd_setShadeMode();
     void cmd_setNodeSelection();
     void cmd_screenShot();
@@ -410,6 +416,64 @@ namespace hm {
     renderer->setTransferFunction(xf);
   }
 
+  // ==================================================================
+
+  void MPIRenderEngine::setIsoValues(const std::vector<float> &values)
+  {
+    // ------------------------------------------------------------------
+    // send request....
+    // ------------------------------------------------------------------
+    int cmd = SET_ISO;
+    sendToWorkers(cmd);
+    sendToWorkers(values);
+    sendEndOfMessage();
+    // ------------------------------------------------------------------
+    // and do our own....
+    // ------------------------------------------------------------------
+    if (passThrough)
+      passThrough->setIsoValues(values);
+  }
+
+  void MPIRenderEngine::setChannelFilter(const hs::ChannelFilter &filter)
+  {
+    int cmd = SET_CHANNEL_FILTER;
+    sendToWorkers(cmd);
+    int mask  = (int)filter.channelMask;
+    int dirty = filter.channelDirty ? 1 : 0;
+    sendToWorkers(mask);
+    sendToWorkers(dirty);
+    sendEndOfMessage();
+    if (passThrough)
+      passThrough->setChannelFilter(filter);
+  }
+
+  void WorkerLoop::cmd_setChannelFilter()
+  {
+    hs::ChannelFilter filter;
+    int mask = 0, dirty = 0;
+    fromMaster(mask);
+    fromMaster(dirty);
+    checkEndOfMessage();
+    filter.channelMask  = (uint32_t)mask;
+    filter.channelDirty = dirty != 0;
+    renderer->setChannelFilter(filter);
+  }
+
+  void WorkerLoop::cmd_setISO()
+  {
+    // ------------------------------------------------------------------
+    // get args....
+    // ------------------------------------------------------------------
+    std::vector<float> values;
+    fromMaster(values);
+    checkEndOfMessage();
+
+    // ------------------------------------------------------------------
+    // and execute
+    // ------------------------------------------------------------------
+    renderer->setIsoValues(values);
+  }
+
 #if HS_USE_MULTI_SCATTERING
   // ==================================================================
 
@@ -567,9 +631,12 @@ namespace hm {
         cmd_setVolumeScatterSettings();
         break;
 #endif
-      // case SET_ISO:
-      //   cmd_setISO();
-      //   break;
+      case SET_ISO:
+        cmd_setISO();
+        break;
+      case SET_CHANNEL_FILTER:
+        cmd_setChannelFilter();
+        break;
       case SET_LIGHTS:
         cmd_setLights();
         break;

@@ -96,7 +96,8 @@ namespace hm {
     anari.frame = anari::newObject<anari::Frame>(anari.device);
     anari::setParameter(anari.device, anari.frame, "world",    anari.world);
     anari::setParameter(anari.device, anari.frame, "renderer", anari.renderer);
-    anari::setParameter(anari.device, anari.frame, "denoise",  (bool)true);
+    anari::setParameter(anari.device, anari.frame, "denoise",
+                        (bool)hayMaker->globalRenderSettings.denoise);
 
     anari.camera = anari::newObject<anari::Camera>(anari.device, "perspective");
 
@@ -185,6 +186,16 @@ namespace hm {
     anari::setAndReleaseParameter(device, volume, "opacity", alphaArray);
   }
   
+  void AnariDeviceRenderer::setIsoValues(const std::vector<float> &values)
+  {
+    size_t n = std::min(values.size(),isoGeoms.size());
+    for (size_t i=0;i<n;i++) {
+      anari::setParameter(anari.device,isoGeoms[i],"isovalue",values[i]);
+      anari::commitParameters(anari.device,isoGeoms[i]);
+    }
+    if (n) anari::commitParameters(anari.device,anari.world);
+  }
+
   void AnariDeviceRenderer::setTransferFunction(const TransferFunction &xf)
   {
     currentXF = xf;
@@ -339,9 +350,12 @@ namespace hm {
     // render all structured volumes
     // -----------------------------------------------------------------
     for (auto vol : myData.structuredVolumes) {
-      anari::Volume createdVolume = create(*vol);
-      if (createdVolume)
-        rootVolumes.push_back(createdVolume);
+      std::pair<anari::Volume,std::vector<anari::Surface>>
+        created = create(*vol);
+      if (created.first)
+        rootVolumes.push_back(created.first);
+      for (auto surf : created.second)
+        rootGeoms.push_back(surf);
     }
 #if HS_USE_MULTI_SCATTERING
     for (auto vol : myData.nanovdbVolumes) {
@@ -356,6 +370,14 @@ namespace hm {
     // render all *UN*-structured volumes
     // -----------------------------------------------------------------
     for (auto vol : myData.unsts) {
+      anari::Volume createdVolume = create(vol);
+      if (createdVolume)
+        rootVolumes.push_back(createdVolume);
+    }
+    // ------------------------------------------------------------------
+    // render all orbital-current grid fields
+    // -----------------------------------------------------------------
+    for (auto vol : myData.orbGrids) {
       anari::Volume createdVolume = create(vol);
       if (createdVolume)
         rootVolumes.push_back(createdVolume);
@@ -692,7 +714,8 @@ namespace hm {
     lights.push_back(light);
   }
 
-  anari::Volume AnariDeviceRenderer::create(const StructuredVolume &vol)
+  std::pair<anari::Volume,std::vector<anari::Surface>>
+  AnariDeviceRenderer::create(const StructuredVolume &vol)
   {
     anari::math::int3 volumeDims = (const anari::math::int3&)vol.dims;
       
@@ -726,13 +749,51 @@ namespace hm {
         
     anari::commitParameters(anari.device, field);
 
+    if (!vol.isoValues.empty()) {
+      /* iso-surface mode: the scalar field stays on the device and we
+         hang one iso-surface geometry off it per requested value,
+         instead of volume-rendering it. Note barney's iso-surface
+         geometry only honors a single 'isovalue', so N values means N
+         geometries sharing the one field. */
+      anari::Material material
+        = anari::newObject<anari::Material>(anari.device,"physicallyBased");
+      anari::setParameter(anari.device,material,"baseColor",
+                          (const anari::math::float3&)vol.isoColor);
+      anari::setParameter(anari.device,material,"metallic",0.f);
+      anari::setParameter(anari.device,material,"roughness",0.4f);
+      anari::setParameter(anari.device,material,"opacity",1.f);
+      anari::commitParameters(anari.device,material);
+
+      std::vector<anari::Surface> surfaces;
+      for (float isoValue : vol.isoValues) {
+        std::cout << "#hm: creating iso-surface at " << isoValue << std::endl;
+        auto geom = anari::newObject<anari::Geometry>
+          (anari.device,"isosurface");
+        anari::setParameter(anari.device,geom,"field",field);
+        anari::setParameter(anari.device,geom,"isovalue",isoValue);
+        anari::commitParameters(anari.device,geom);
+
+        auto surface = anari::newObject<anari::Surface>(anari.device);
+        anari::setParameter(anari.device,surface,"geometry",geom);
+        anari::setParameter(anari.device,surface,"material",material);
+        anari::commitParameters(anari.device,surface);
+        surfaces.push_back(surface);
+        /* keep our own (retained) handle so the UI can change the
+           iso-value later; the surface holds one of its own */
+        isoGeoms.push_back(geom);
+      }
+      anari::release(anari.device,material);
+      anari::release(anari.device,field);
+      return { (anari::Volume)0, surfaces };
+    }
+
     auto volume = anari::newObject<anari::Volume>
       (anari.device, "transferFunction1D");
     anari::setAndReleaseParameter(anari.device, volume,
                                   "value", field);
     anari::commitParameters(anari.device, volume);
 
-    return volume;
+    return { volume, {} };
   }
 
   void AnariDeviceRenderer
@@ -1068,6 +1129,20 @@ namespace hm {
     return { volume, isoSurfaces };
   }
   
+
+  /*! push an orbital-channel selection to every orbGrid field. The mask
+      changes the per-voxel active vectors - and therefore the macro-cell
+      ranges and the majorants, which barney rebuilds on the set. */
+  void AnariDeviceRenderer::setChannelFilter(const hs::ChannelFilter &filter)
+  {
+    if (filter.channelDirty)
+      for (auto field : orbGridFields)
+        anari::setParameter(anari.device,field,"channelMask",
+                            (int)filter.channelMask);
+    for (auto field : orbGridFields)
+      anari::commitParameters(anari.device,field);
+  }
+
   anari::Volume AnariDeviceRenderer
   ::create(const std::pair<umesh::UMesh::SP,box3f> &meshAndDomain)
   {
@@ -1150,6 +1225,45 @@ namespace hm {
     anari::setAndReleaseParameter(anari.device, volume, "value", field);
     anari::commitParameters(anari.device, volume);
 
+    return volume;
+  }
+
+
+  /*! the orbital-current field on a dense regular grid.
+
+    Created as barney's "orbGrid" scalar field, which carries the per-channel
+    voxel vectors and the enabled-channel mask. The channel vectors go over as
+    a flat float array - three per voxel - because the generic custom-field
+    bridge only forwards scalar element types; the memory layout is identical
+    to an array of vec3f, which is what the field reads it back as. */
+  anari::Volume AnariDeviceRenderer::create(const hs::OrbGridVolume::SP &orb)
+  {
+    if (!orb) return {};
+    auto field = anari::newObject<anari::SpatialField>(anari.device,"orbGrid");
+
+    anari::setParameterArray1D
+      (anari.device, field, "channel.vector",
+       (const float *)orb->channelVec.data(), orb->channelVec.size()*3);
+    anari::setParameter(anari.device, field, "dims",
+                        anari::math::int3(orb->dims.x,orb->dims.y,orb->dims.z));
+    anari::setParameter(anari.device, field, "gridOrigin",
+                        anari::math::float3(orb->gridOrigin.x,
+                                            orb->gridOrigin.y,
+                                            orb->gridOrigin.z));
+    anari::setParameter(anari.device, field, "gridSpacing",
+                        anari::math::float3(orb->gridSpacing.x,
+                                            orb->gridSpacing.y,
+                                            orb->gridSpacing.z));
+    anari::setParameter(anari.device, field, "numChannels", orb->numChannels);
+    anari::setParameter(anari.device, field, "channelMask",
+                        (int)orb->channelMask);
+    anari::commitParameters(anari.device, field);
+    orbGridFields.push_back(field);
+
+    auto volume = anari::newObject<anari::Volume>(anari.device,
+                                                  "transferFunction1D");
+    anari::setParameter(anari.device, volume, "value", field);
+    anari::commitParameters(anari.device, volume);
     return volume;
   }
 

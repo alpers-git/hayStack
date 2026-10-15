@@ -25,6 +25,11 @@ namespace hm {
     
     /*! default color map index to use */
     int defaultColorMapIndex = 0;
+
+    /*! the optix denoiser smooths a low-sample frame into something that looks
+        converged but is not; turn it off when the image has to be the actual
+        accumulated result (e.g. comparing renders, or judging noise) */
+    bool denoise = true;
   };
   
   struct DeviceConfig {
@@ -57,6 +62,8 @@ namespace hm {
     void terminate() {}
 
     void setTransferFunction(const hs::TransferFunction &xf) override;
+    void setIsoValues(const std::vector<float> &values) override;
+    void setChannelFilter(const hs::ChannelFilter &filter) override;
     void setVolumeScatterSettings(const hs::VolumeScatterSettings &settings) override;
     hs::VolumeScatterSettings getVolumeScatterSettings() const override;
     

@@ -3,9 +3,11 @@
 
 #include "hayMaker/HayMaker.h"
 #include "hayStack/loader/DataLoader.h"
+#include "hayStack/loader/RAWVolumeContent.h"
 #if HS_IMGUI
 # include "owlViewer/OWLViewer.h"
 # include "owlViewer/XFEditor.h"
+# include "OrbitalPanel.h"
 #else
 # define STB_IMAGE_WRITE_IMPLEMENTATION 1
 # define STB_IMAGE_IMPLEMENTATION 1
@@ -56,6 +58,7 @@ namespace hm {
     bool createHeadNode = false;
     int  numExtraDisplayRanks = 0;
     int  numFramesAccum = 1;
+    bool denoise = true;
     int  spp            = 1;
     bool verbose = true;
     CmdLineCamera camera;
@@ -66,7 +69,18 @@ namespace hm {
     //   int numSteps = 0;
     // } cameraPath;
     bool measure = 0;
+    /*! the positional data arguments, verbatim, so the '/' key can print a
+        command line that reproduces the scene */
+    std::vector<std::string> contentArgs;
+    /*! toggle this many channels off and back on before rendering. The filter
+        state ends where it started, so the image must be identical to one
+        rendered without it - a regression test for state that survives a
+        filter change when it should not. */
+    int  toggleCycles = 0;
     std::string envMapFileName;
+    /*! initial iso-values, harvested from the 'gpuIso=' key of the
+        data URLs; one UI slider gets created per entry */
+    std::vector<float> isoValues;
   };
   FromCL fromCL;
   
@@ -91,15 +105,41 @@ namespace hm {
   {
     Viewer(BoundsData worldBounds,
            RenderEngineInterface *const renderer,
-           hs::mpi::Comm *world)
+           hs::mpi::Comm *world,
+           const hs::OrbGridVolume::SP &orbGrid = {})
       : renderer(renderer),
         world(world),
         worldBounds(worldBounds)
     {
       xf.absDomain = worldBounds.scalars;
+      isoValues = fromCL.isoValues;
+      if (orbGrid) {
+        this->orbGrid = orbGrid;
+        orbPanel = new hs::OrbitalPanel(orbGrid);
+        /* seed only the DOMAIN and density from the field: the world scalar
+           range is the wrong framing for an orbital field, but the colour map
+           is the XFEditor's business. pushing one in here overrode the
+           editor's own maps with an invented one. */
+        const hs::TransferFunction seed
+          = hs::makeSignedTransferFunction(orbGrid->valueRange,
+                                           orbGrid->bounds,
+                                           orbGrid->alphaGamma,
+                                           orbGrid->opacityScale,
+                                           orbGrid->domainScale);
+        xf.absDomain   = seed.absDomain;
+        xf.relDomain   = seed.relDomain;
+        xf.baseDensity = seed.baseDensity;
+        /* the map the offline renders use, taken from the editor's own library
+           rather than rebuilt by hand */
+        useBuiltinColorMap("cool_warm_extended");
+        filterDirty = true;
+      }
     }
 
     const BoundsData worldBounds;
+    hs::OrbGridVolume::SP orbGrid;
+    /*! how many scenes '/' has dumped this session, so each gets its own .xf */
+    int sceneDumpCount = 0;
     
     bool uiIsOn = true;
     
@@ -107,6 +147,32 @@ namespace hm {
     {
       if (!uiIsOn) return;
       
+      if (orbPanel) {
+        /* this mode owns the volume, so the generic scalar-range and iso
+           controls below would only duplicate - and mis-frame - what the
+           panel already does */
+        /* the gizmo draws no window of its own, and without one it lands in
+           imgui's implicit Debug window - nowhere near the panel that owns the
+           domain. Give it a window and put the value axis directly under the
+           ramp, where the colours it labels actually are. run_ui leaves the
+           cursor just below its canvas and the canvas spans the full content
+           width, so the ticks line up with the ramp. */
+        ImGui::Begin("Transfer function");
+        if (xfEditor.run_ui())
+          xfDirty = true;
+        orbPanel->drawRuler();
+        ImGui::End();
+        if (orbPanel->run_ui()) {
+          xf.absDomain = orbPanel->domain();
+          xf.relDomain = orbPanel->relDomain();
+          xf.baseDensity = orbPanel->baseDensity();
+          xfDirty = true;
+        }
+        if (orbPanel->filterCommitted())
+          filterDirty = true;
+        return;
+      }
+
       ImGui::Begin("HayStack/Imgui");
       
       if (worldBounds.scalars.empty()) {
@@ -139,6 +205,20 @@ namespace hm {
                                0.f,200.f))
           xfDirty = true;
       }
+      if (!isoValues.empty()) {
+        ImGui::Separator();
+        ImGui::Text("iso-surfaces");
+        /* iso-values live in scalar-field units, so the field's own
+           range is the only sensible slider range */
+        for (size_t i=0;i<isoValues.size();i++) {
+          char label[64];
+          snprintf(label,sizeof(label),"isoValue[%zu]",i);
+          if (ImGui::SliderFloat(label,&isoValues[i],
+                                 worldBounds.scalars.lower,
+                                 worldBounds.scalars.upper))
+            isoDirty = true;
+        }
+      }
       ImGui::End();
     }
 
@@ -159,6 +239,70 @@ namespace hm {
     }
     
     /*! this gets called when the user presses a key on the keyboard ... */
+    /*! Print an hsOffline command line that reproduces exactly what is on
+        screen: the same data, the same camera, and the same look.
+
+        The transfer function is written out and referenced with -xf rather than
+        re-derived from url options: the colour map, the domain and the density
+        are all live editor state, and there is no set of url options that
+        reconstructs an edited map. The orbital channel selection *is* a url
+        option, so that is appended to the field's url. */
+    void dumpSceneConfig()
+    {
+      hs::Camera cam;
+      OWLViewer::getCameraOrientation((owl::common::vec3f&)cam.vp,
+                                      (owl::common::vec3f&)cam.vi,
+                                      (owl::common::vec3f&)cam.vu,
+                                      cam.fovy);
+
+      char xfName[256];
+      snprintf(xfName,sizeof(xfName),"scene_%03d.xf",sceneDumpCount);
+      xf.save(xfName);
+
+      /* the channel selection, as ':channels=' understands it */
+      std::string chanOpt;
+      if (orbGrid && !orbGrid->channelNames.empty() && orbPanel) {
+        const hs::ChannelFilter &f = orbPanel->getFilter();
+        std::string names;
+        size_t on = 0;
+        for (size_t c=0;c<orbGrid->channelNames.size();c++)
+          if (f.channelMask & (1u<<c)) {
+            if (!names.empty()) names += ",";
+            names += orbGrid->channelNames[c];
+            on++;
+          }
+        /* the .orbg loader has no spelling for an empty selection */
+        if (on > 0 && on != orbGrid->channelNames.size())
+          chanOpt = ":channels=" + names;
+      }
+
+      const owl::common::vec2i sz = getWindowSize();
+      std::cout << "\n#hs: ---- scene " << sceneDumpCount
+                << " (transfer function in " << xfName << ") ----\n";
+      std::cout << "./hsOffline";
+      for (auto &a : fromCL.contentArgs) {
+        const bool isField
+          = a.find(".orbg") != std::string::npos
+          || a.find("orbgrid://") != std::string::npos;
+        std::cout << " \\\n    \"" << a
+                  << (isField ? chanOpt : std::string()) << "\"";
+      }
+      std::cout << " \\\n    --camera "
+                << cam.vp.x << " " << cam.vp.y << " " << cam.vp.z << "  "
+                << cam.vi.x << " " << cam.vi.y << " " << cam.vi.z << "  "
+                << cam.vu.x << " " << cam.vu.y << " " << cam.vu.z
+                << " -fovy " << cam.fovy;
+      std::cout << " \\\n    -res " << sz.x << " " << sz.y
+                << " -spp " << fromCL.spp
+                << " -xf " << xfName;
+      if (!std::isnan(fromCL.bgColor.x))
+        std::cout << " --bg-color " << fromCL.bgColor.x << " " << fromCL.bgColor.y
+                  << " " << fromCL.bgColor.z << " " << fromCL.bgColor.w;
+      std::cout << " \\\n    -o scene_" << sceneDumpCount << ".png"
+                << std::endl << std::endl;
+      sceneDumpCount++;
+    }
+
     void key(char key, const owl::common::vec2i &where) override
     {
       switch(key) {
@@ -216,6 +360,10 @@ namespace hm {
         break;
       }
 
+      case '/':
+        dumpSceneConfig();
+        break;
+
       case 'T':
         std::cout << "(T) : dumping transfer function" << std::endl;
         xf.save("hayThere.xf");
@@ -247,6 +395,18 @@ namespace hm {
         
         renderer->setTransferFunction(xf);
         xfDirty = false;
+        accumDirty = true;
+      }
+
+      if (isoDirty) {
+        renderer->setIsoValues(isoValues);
+        isoDirty = false;
+        accumDirty = true;
+      }
+
+      if (filterDirty && orbPanel) {
+        renderer->setChannelFilter(orbPanel->getFilter());
+        filterDirty = false;
         accumDirty = true;
       }
 
@@ -324,12 +484,19 @@ namespace hm {
 
     //    TransferFunction xf;
     bool xfDirty = true;
+    /*! live iso-values, one per 'gpuIso=' iso-surface */
+    std::vector<float> isoValues;
+    bool isoDirty = false;
 #if HS_USE_MULTI_SCATTERING
     VolumeScatterSettings scatterSettings;
     bool scatterDirty = true;
     VolumeScatterPanel *scatterPanel = 0;
 #endif
     bool accumDirty = true;
+    /*! non-null only when the scene has an orbital-current grid field; when
+        it is set the panel replaces the generic volume/iso ui entirely */
+    hs::OrbitalPanel *orbPanel = nullptr;
+    bool filterDirty = false;
     RenderEngineInterface *const renderer;
     hs::mpi::Comm *world;
 
@@ -343,10 +510,28 @@ namespace hm {
     // domain, color, and alpha)
     hs::TransferFunction xf;
     
+    /*! pick one of the XFEditor's own maps by name. The editor ships
+        cool_warm_extended among others; seeding it with a ramp written
+        elsewhere replaces its library with an invented map that then cannot be
+        got back from the combo box. */
+    void useBuiltinColorMap(const char *want)
+    {
+      const std::vector<std::string> names
+        = owl::viewer::XFEditor::colorMapLibrary.getNames();
+      for (size_t i=0;i<names.size();i++)
+        if (names[i] == want) { xfEditor.changeColorScheme((int)i); return; }
+    }
+
     void loadXF() {
       xf.load(fromCL.xfFileName);
-      xfEditor.setColorAndAlpha((const owl::common::vec4f*)xf.colorMap.data(),
-                                xf.colorMap.size());
+      /* an orbital field takes only the DOMAIN and density from the file and
+         keeps the editor's own map (see useBuiltinColorMap): a .xf written by
+         make_xf.py carries a hand-built ramp, and pushing it in here made the
+         gizmo open on a map that is not one of its own. Every other scene gets
+         the file's colour map, as before. */
+      if (!orbPanel)
+        xfEditor.setColorAndAlpha((const owl::common::vec4f*)xf.colorMap.data(),
+                                  xf.colorMap.size());
       xfDirty = true;
     }
     
@@ -550,6 +735,14 @@ int main(int ac, char **av)
     const std::string arg = av[i];
     if (arg[0] != '-') {
       loader.addContent(arg);
+      fromCL.contentArgs.push_back(arg);
+      /* peek at the same URL the loader just consumed, so the UI
+         knows how many iso-surfaces exist and where they started */
+      try {
+        hs::loader::ResourceSpecifier url(arg);
+        for (float v : hs::loader::parseGpuIsoValues(url))
+          fromCL.isoValues.push_back(v);
+      } catch (...) { /* not a resource URL we care about */ }
     } else if (arg == "--no-bg") {
       fromCL.bgColor = ::mini::common::vec4f(0.f);
     } else if (arg == "--bg-color") {
@@ -571,6 +764,8 @@ int main(int ac, char **av)
     } else if (arg == "-env" || arg == "--env-map") {
       fromCL.envMapFileName = av[++i];
       loader.sharedLights.envMap = fromCL.envMapFileName;
+    } else if (arg == "--no-denoiser" || arg == "--no-denoise") {
+      fromCL.denoise = false;
     } else if (arg == "--num-frames") {
       fromCL.numFramesAccum = std::stoi(av[++i]);
     } else if (arg == "--ambient") {
@@ -583,6 +778,8 @@ int main(int ac, char **av)
       fromCL.mergeUnstructuredMeshes = false;
     } else if (arg == "--default-radius") {
       loader.defaultRadius = std::stof(av[++i]);
+    } else if (arg == "--toggle-cycles") {
+      fromCL.toggleCycles = std::stoi(av[++i]);
     } else if (arg == "--measure") {
       fromCL.measure = true;
     } else if (arg == "-o") {
@@ -712,6 +909,7 @@ int main(int ac, char **av)
   globalRenderSettings.samplesPerPixel = fromCL.spp;
   globalRenderSettings.ambientRadiance = fromCL.ambientRadiance;
   globalRenderSettings.bgColor = fromCL.bgColor;
+  globalRenderSettings.denoise = fromCL.denoise;
   globalRenderSettings.defaultColorMapIndex = fromCL.cmID;
   
   HayMaker *hayMaker
@@ -778,8 +976,19 @@ int main(int ac, char **av)
     exit(0);
   }
 
+  /* an orbital-current grid field takes over the volume ui and the default
+     transfer function, so find one if the scene has one; the head node has no
+     partitions of its own, and in that case both simply stay off */
+  hs::OrbGridVolume::SP orbGrid;
+  if (localPartitions)
+    for (auto part : localPartitions->myPartitions)
+      if (part && !part->orbGrids.empty()) {
+        orbGrid = part->orbGrids[0];
+        break;
+      }
+
 #if HS_IMGUI
-  Viewer viewer(worldBounds,renderer,&world);
+  Viewer viewer(worldBounds,renderer,&world,orbGrid);
 
   // viewer.show();
   viewer.enableFlyMode();
@@ -844,6 +1053,16 @@ int main(int ac, char **av)
     xf.load(fromCL.xfFileName);
     renderer->setTransferFunction(xf);
     renderer->resetAccumulation();
+  } else if (orbGrid) {
+    /* the stock default is opaque white over the whole domain, which on a
+       field that is nonzero nearly everywhere is just a white wall */
+    renderer->setTransferFunction
+      (hs::makeSignedTransferFunction(orbGrid->valueRange,
+                                      orbGrid->bounds,
+                                      orbGrid->alphaGamma,
+                                      orbGrid->opacityScale,
+                                      orbGrid->domainScale));
+    renderer->resetAccumulation();
   }
 
   if (!fromCL.cameraPath.empty()) {
@@ -877,6 +1096,39 @@ int main(int ac, char **av)
     exit(0);
   }
   
+  /* exercise the filter path before rendering: every channel off, then every
+     channel back on. The mask ends identical to where it started, so anything
+     that differs afterwards is state that a filter change corrupted. */
+  if (fromCL.toggleCycles != 0 && orbGrid) {
+    hs::ChannelFilter f;
+    for (int c=0;c<abs(fromCL.toggleCycles);c++) {
+      /* drop ONE channel, the way a user ticking a box does. Clearing every
+         channel instead empties every macro-cell, which is a different (and
+         more forgiving) path than the one that actually gets exercised.
+         A negative count keeps the mask UNCHANGED through the cycle: same
+         number of commits and frames, no filter change, so it isolates what
+         the extra frames alone do from what a filter change does. */
+      f.channelMask = (fromCL.toggleCycles < 0)
+        ? orbGrid->channelMask
+        : (orbGrid->channelMask & ~1u);
+      f.channelDirty = true;
+      renderer->setChannelFilter(f);
+      /* a frame is what actually drives the commit down into barney */
+      renderer->renderFrame();
+      f.channelMask = orbGrid->channelMask;
+      f.channelDirty = true;
+      renderer->setChannelFilter(f);
+      renderer->renderFrame();
+    }
+    /* the frames above were rendered with the filter half-way through the
+       cycle; without this they would accumulate into the one being compared
+       and the test would fail on its own book-keeping rather than on the
+       renderer's */
+    renderer->resetAccumulation();
+    std::cout << "#hs: completed " << fromCL.toggleCycles
+              << " filter toggle cycles" << std::endl;
+  }
+
 #if 1
   if (fromCL.measure) {
     int numFramesRendered = 0;

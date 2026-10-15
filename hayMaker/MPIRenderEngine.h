@@ -26,6 +26,8 @@ namespace hm {
     // void setXF(const range1f &domain,
     //            const std::vector<vec4f> &colors) override;
     void setTransferFunction(const TransferFunction &xf) override;
+    void setIsoValues(const std::vector<float> &values) override;
+    void setChannelFilter(const hs::ChannelFilter &filter) override;
 #if HS_USE_MULTI_SCATTERING
     void setVolumeScatterSettings(const VolumeScatterSettings &settings) override;
 #endif

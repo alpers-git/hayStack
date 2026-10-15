@@ -13,6 +13,7 @@
 #include "hayStack/loader/BoxesFromFile.h"
 #include "hayStack/loader/MiniContent.h"
 #include "hayStack/loader/UMeshContent.h"
+#include "hayStack/loader/OrbGridFromFile.h"
 #include "hayStack/loader/OBJContent.h"
 #include "hayStack/loader/DGEFContent.h"
 #if HS_VTK
@@ -344,7 +345,11 @@ namespace hs {
 
       // first, parse all the files we recognise from file name
       // extension:
-      if (endsWith(contentDescriptor,".umesh")) {
+      if (endsWith(contentDescriptor,".orbg")
+          || startsWith(contentDescriptor,"orbgrid://")) {
+        loader::OrbGridFromFile::create
+          (this,ResourceSpecifier(addIfRequired("orbgrid://",contentDescriptor)));
+      } else if (endsWith(contentDescriptor,".umesh")) {
         UMeshContent::create(this,contentDescriptor);
 #if HS_VTK
       } else if (endsWith(contentDescriptor,".vtu") ||
@@ -396,6 +401,12 @@ namespace hs {
       } else if (endsWith(contentDescriptor,".nvdb")) {
         NVDBVolumeContent::create(this,addIfRequired("nvdb://",contentDescriptor));
 #endif
+      } else if (endsWith(contentDescriptor,".pcr")) {
+        /* position-colour-radius, as xyz2pcr.py writes it; the format tag is
+           implied by the extension so it need not be spelled out */
+        loader::SpheresFromFile::create
+          (this,ResourceSpecifier(addIfRequired("spheres://",contentDescriptor)
+                                  +":format=pcr"));
       } else if (endsWith(contentDescriptor,".tamr")) {
         TAMRContent::create(this,addIfRequired("tamr://",contentDescriptor));
       } else {
