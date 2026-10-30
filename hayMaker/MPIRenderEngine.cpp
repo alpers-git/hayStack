@@ -29,7 +29,7 @@ namespace hm {
      SET_VOLUME_SCATTER,
 #endif
      SET_ISO,
-     SET_CHANNEL_FILTER,
+     SET_CHANNEL_MIX,
      MAX_VALID_COMMANDS
     } CommandTag;
   const char *commandNames[]
@@ -46,7 +46,7 @@ namespace hm {
      "SET_VOLUME_SCATTER",
 #endif
      "SET_ISO",
-     "SET_CHANNEL_FILTER",
+     "SET_CHANNEL_MIX",
   };
 
   
@@ -63,7 +63,7 @@ namespace hm {
                            "set_volume_scatter",
 #endif
                            "set_iso",
-                           "set_channel_filter",
+                           "set_channel_mix",
                            "<EOL>" };
                            
   
@@ -104,7 +104,7 @@ namespace hm {
     void cmd_setVolumeScatterSettings();
 #endif
     void cmd_setISO();
-    void cmd_setChannelFilter();
+    void cmd_setChannelMix();
     void cmd_setShadeMode();
     void cmd_setNodeSelection();
     void cmd_screenShot();
@@ -434,29 +434,35 @@ namespace hm {
       passThrough->setIsoValues(values);
   }
 
-  void MPIRenderEngine::setChannelFilter(const hs::ChannelFilter &filter)
+  void MPIRenderEngine::setChannelMix(const hs::ChannelMix &mix)
   {
-    int cmd = SET_CHANNEL_FILTER;
+    int cmd = SET_CHANNEL_MIX;
     sendToWorkers(cmd);
-    int mask  = (int)filter.channelMask;
-    int dirty = filter.channelDirty ? 1 : 0;
-    sendToWorkers(mask);
+    int reduction = (int)mix.reduction;
+    int dirty     = mix.dirty ? 1 : 0;
+    sendToWorkers(mix.weights);
+    sendToWorkers(reduction);
+    sendToWorkers(mix.component);
+    sendToWorkers(mix.direction);
     sendToWorkers(dirty);
     sendEndOfMessage();
     if (passThrough)
-      passThrough->setChannelFilter(filter);
+      passThrough->setChannelMix(mix);
   }
 
-  void WorkerLoop::cmd_setChannelFilter()
+  void WorkerLoop::cmd_setChannelMix()
   {
-    hs::ChannelFilter filter;
-    int mask = 0, dirty = 0;
-    fromMaster(mask);
+    hs::ChannelMix mix;
+    int reduction = 0, dirty = 0;
+    fromMaster(mix.weights);
+    fromMaster(reduction);
+    fromMaster(mix.component);
+    fromMaster(mix.direction);
     fromMaster(dirty);
     checkEndOfMessage();
-    filter.channelMask  = (uint32_t)mask;
-    filter.channelDirty = dirty != 0;
-    renderer->setChannelFilter(filter);
+    mix.reduction = (hs::Reduction)reduction;
+    mix.dirty     = dirty != 0;
+    renderer->setChannelMix(mix);
   }
 
   void WorkerLoop::cmd_setISO()
@@ -634,8 +640,8 @@ namespace hm {
       case SET_ISO:
         cmd_setISO();
         break;
-      case SET_CHANNEL_FILTER:
-        cmd_setChannelFilter();
+      case SET_CHANNEL_MIX:
+        cmd_setChannelMix();
         break;
       case SET_LIGHTS:
         cmd_setLights();

@@ -5,7 +5,7 @@
 
 #include "hayStack/TransferFunction.h"
 #include "hayStack/NanoVDBVolume.h"
-#include "hayStack/OrbGridVolume.h"
+#include "hayStack/MultiVariateVolume.h"
 
 /* parallel renderer abstraction */
 namespace hm {
@@ -18,9 +18,9 @@ namespace hm {
     /*! re-set the iso-values of all 'gpuIso=' iso-surfaces, in
         the order they were created */
     virtual void setIsoValues(const std::vector<float> &values) {}
-    /*! re-set the enabled orbital channels on every orbGrid field; the mask
-        is only pushed when the caller marks it dirty */
-    virtual void setChannelFilter(const hs::ChannelFilter &filter) {}
+    /*! re-set the channel mix of every multi-variate volume; only pushed
+        when the caller marks it dirty */
+    virtual void setChannelMix(const hs::ChannelMix &mix) {}
     virtual void setVolumeScatterSettings(const hs::VolumeScatterSettings &settings) {}
     virtual hs::VolumeScatterSettings getVolumeScatterSettings() const { return {}; }
     

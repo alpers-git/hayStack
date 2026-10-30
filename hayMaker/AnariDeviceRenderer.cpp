@@ -375,9 +375,9 @@ namespace hm {
         rootVolumes.push_back(createdVolume);
     }
     // ------------------------------------------------------------------
-    // render all orbital-current grid fields
+    // render all multi-variate volumes
     // -----------------------------------------------------------------
-    for (auto vol : myData.orbGrids) {
+    for (auto vol : myData.multiVariates) {
       anari::Volume createdVolume = create(vol);
       if (createdVolume)
         rootVolumes.push_back(createdVolume);
@@ -1130,17 +1130,14 @@ namespace hm {
   }
   
 
-  /*! push an orbital-channel selection to every orbGrid field. The mask
-      changes the per-voxel active vectors - and therefore the macro-cell
-      ranges and the majorants, which barney rebuilds on the set. */
-  void AnariDeviceRenderer::setChannelFilter(const hs::ChannelFilter &filter)
+  /*! barney re-mixes the channels and rebuilds the majorants on commit */
+  void AnariDeviceRenderer::setChannelMix(const hs::ChannelMix &mix)
   {
-    if (filter.channelDirty)
-      for (auto field : orbGridFields)
-        anari::setParameter(anari.device,field,"channelMask",
-                            (int)filter.channelMask);
-    for (auto field : orbGridFields)
+    if (!mix.dirty) return;
+    for (auto field : multiVariateFields) {
+      setMixParameters(field,mix);
       anari::commitParameters(anari.device,field);
+    }
   }
 
   anari::Volume AnariDeviceRenderer
@@ -1229,36 +1226,42 @@ namespace hm {
   }
 
 
-  /*! the orbital-current field on a dense regular grid.
-
-    Created as barney's "orbGrid" scalar field, which carries the per-channel
-    voxel vectors and the enabled-channel mask. The channel vectors go over as
-    a flat float array - three per voxel - because the generic custom-field
-    bridge only forwards scalar element types; the memory layout is identical
-    to an array of vec3f, which is what the field reads it back as. */
-  anari::Volume AnariDeviceRenderer::create(const hs::OrbGridVolume::SP &orb)
+  void AnariDeviceRenderer::setMixParameters(anari::SpatialField field,
+                                             const hs::ChannelMix &mix)
   {
-    if (!orb) return {};
-    auto field = anari::newObject<anari::SpatialField>(anari.device,"orbGrid");
+    anari::setParameterArray1D(anari.device, field, "channelWeights",
+                               mix.weights.data(), mix.weights.size());
+    anari::setParameter(anari.device, field, "reduction",
+                        hs::reductionName(mix.reduction));
+    anari::setParameter(anari.device, field, "component", mix.component);
+    anari::setParameter(anari.device, field, "direction",
+                        anari::math::float3(mix.direction.x,
+                                            mix.direction.y,
+                                            mix.direction.z));
+  }
 
-    anari::setParameterArray1D
-      (anari.device, field, "channel.vector",
-       (const float *)orb->channelVec.data(), orb->channelVec.size()*3);
+  anari::Volume AnariDeviceRenderer::create(const hs::MultiVariateVolume::SP &mv)
+  {
+    if (!mv) return {};
+    auto field
+      = anari::newObject<anari::SpatialField>(anari.device,"multiVariateGrid");
+    anari::setParameterArray1D(anari.device, field, "channels",
+                               mv->channelData.data(), mv->channelData.size());
     anari::setParameter(anari.device, field, "dims",
-                        anari::math::int3(orb->dims.x,orb->dims.y,orb->dims.z));
+                        anari::math::int3(mv->dims.x,mv->dims.y,mv->dims.z));
     anari::setParameter(anari.device, field, "gridOrigin",
-                        anari::math::float3(orb->gridOrigin.x,
-                                            orb->gridOrigin.y,
-                                            orb->gridOrigin.z));
+                        anari::math::float3(mv->gridOrigin.x,
+                                            mv->gridOrigin.y,
+                                            mv->gridOrigin.z));
     anari::setParameter(anari.device, field, "gridSpacing",
-                        anari::math::float3(orb->gridSpacing.x,
-                                            orb->gridSpacing.y,
-                                            orb->gridSpacing.z));
-    anari::setParameter(anari.device, field, "numChannels", orb->numChannels);
-    anari::setParameter(anari.device, field, "channelMask",
-                        (int)orb->channelMask);
+                        anari::math::float3(mv->gridSpacing.x,
+                                            mv->gridSpacing.y,
+                                            mv->gridSpacing.z));
+    anari::setParameter(anari.device, field, "numChannels", mv->numChannels);
+    anari::setParameter(anari.device, field, "numComponents", mv->numComponents);
+    setMixParameters(field,mv->mix);
     anari::commitParameters(anari.device, field);
-    orbGridFields.push_back(field);
+    multiVariateFields.push_back(field);
 
     auto volume = anari::newObject<anari::Volume>(anari.device,
                                                   "transferFunction1D");

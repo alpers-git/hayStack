@@ -50,7 +50,7 @@ namespace hs {
         bounds.scalars.extend((const range1f&)sr);
       }
     }
-    for (auto &g : orbGrids)
+    for (auto &g : multiVariates)
       if (g) {
         bounds.spatial.extend(g->bounds);
         bounds.scalars.extend(g->valueRange);

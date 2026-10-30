@@ -4,14 +4,14 @@
 #pragma once
 
 #include "hayStack/loader/DataLoader.h"
-#include "hayStack/OrbGridVolume.h"
+#include "hayStack/MultiVariateVolume.h"
 #include <fstream>
 
 namespace hs {
   namespace loader {
 
-    /*! loads a .orbg file: the orbital-current field on a dense regular grid,
-      one vector per channel per voxel, as written by orbitals2umesh.py --grid */
+    /*! loads a .orbg file (orbital-current vectors per channel on a dense
+        grid) as a multi-variate volume with 3-component channels */
     struct OrbGridFromFile : public LoadableContent {
       OrbGridFromFile(const ResourceSpecifier &data, int thisPartID);
       static void create(DataLoader *loader, const ResourceSpecifier &dataURL);

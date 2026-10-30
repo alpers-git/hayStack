@@ -223,10 +223,10 @@ namespace hm {
       dev->setIsoValues(values);
   }
   
-  void HayMaker::setChannelFilter(const hs::ChannelFilter &filter)
+  void HayMaker::setChannelMix(const hs::ChannelMix &mix)
   {
     for (auto dev : perDevice)
-      dev->setChannelFilter(filter);
+      dev->setChannelMix(mix);
   }
   
   void HayMaker::setVolumeScatterSettings(const hs::VolumeScatterSettings &settings)

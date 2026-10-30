@@ -14,6 +14,7 @@
 #include "hayStack/loader/MiniContent.h"
 #include "hayStack/loader/UMeshContent.h"
 #include "hayStack/loader/OrbGridFromFile.h"
+#include "hayStack/loader/MultiVariateContent.h"
 #include "hayStack/loader/OBJContent.h"
 #include "hayStack/loader/DGEFContent.h"
 #if HS_VTK
@@ -345,7 +346,9 @@ namespace hs {
 
       // first, parse all the files we recognise from file name
       // extension:
-      if (endsWith(contentDescriptor,".orbg")
+      if (startsWith(contentDescriptor,"multivariate://")) {
+        loader::MultiVariateFromRaw::create(this,ResourceSpecifier(contentDescriptor));
+      } else if (endsWith(contentDescriptor,".orbg")
           || startsWith(contentDescriptor,"orbgrid://")) {
         loader::OrbGridFromFile::create
           (this,ResourceSpecifier(addIfRequired("orbgrid://",contentDescriptor)));

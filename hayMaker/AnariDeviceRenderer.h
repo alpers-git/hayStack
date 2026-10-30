@@ -57,7 +57,7 @@ namespace hm {
         'gpuIso=' volume, in the order they were created. Values
         beyond the number of surfaces we have are ignored. */
     void setIsoValues(const std::vector<float> &values);
-    void setChannelFilter(const hs::ChannelFilter &filter);
+    void setChannelMix(const hs::ChannelMix &mix);
       
     // void renderAll();
     void renderMiniScene(mini::Scene::SP miniScene);
@@ -103,13 +103,12 @@ namespace hm {
     
     anari::Volume
     create(const std::pair<umesh::UMesh::SP,box3f> &meshAndDomain);
-    /*! the orbital-current field on a dense grid: per-channel voxel vectors
-      plus the enabled-channel mask */
-    anari::Volume create(const hs::OrbGridVolume::SP &orb);
+    /*! one barney "multiVariateGrid" field and volume per multi-variate volume */
+    anari::Volume create(const hs::MultiVariateVolume::SP &mv);
+    void setMixParameters(anari::SpatialField field, const hs::ChannelMix &mix);
 
-    /*! the orbGrid spatial fields we created, so a channel toggle can be
-        pushed without rebuilding the scene */
-    std::vector<anari::SpatialField> orbGridFields;
+    /*! kept so a new channel mix can be pushed without rebuilding the scene */
+    std::vector<anari::SpatialField> multiVariateFields;
 
     using Surfaces = std::vector<anari::Surface>;
     Surfaces create(const hs::SphereSet &content);

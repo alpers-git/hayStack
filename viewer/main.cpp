@@ -7,7 +7,7 @@
 #if HS_IMGUI
 # include "owlViewer/OWLViewer.h"
 # include "owlViewer/XFEditor.h"
-# include "OrbitalPanel.h"
+# include "MultiVariatePanel.h"
 #else
 # define STB_IMAGE_WRITE_IMPLEMENTATION 1
 # define STB_IMAGE_IMPLEMENTATION 1
@@ -72,10 +72,8 @@ namespace hm {
     /*! the positional data arguments, verbatim, so the '/' key can print a
         command line that reproduces the scene */
     std::vector<std::string> contentArgs;
-    /*! toggle this many channels off and back on before rendering. The filter
-        state ends where it started, so the image must be identical to one
-        rendered without it - a regression test for state that survives a
-        filter change when it should not. */
+    /*! toggle channel 0 off and on this many times before rendering (negative:
+        re-push the same mix); the image must match one rendered without it */
     int  toggleCycles = 0;
     std::string envMapFileName;
     /*! initial iso-values, harvested from the 'gpuIso=' key of the
@@ -106,38 +104,34 @@ namespace hm {
     Viewer(BoundsData worldBounds,
            RenderEngineInterface *const renderer,
            hs::mpi::Comm *world,
-           const hs::OrbGridVolume::SP &orbGrid = {})
+           const hs::MultiVariateVolume::SP &mvVolume = {})
       : renderer(renderer),
         world(world),
         worldBounds(worldBounds)
     {
       xf.absDomain = worldBounds.scalars;
       isoValues = fromCL.isoValues;
-      if (orbGrid) {
-        this->orbGrid = orbGrid;
-        orbPanel = new hs::OrbitalPanel(orbGrid);
-        /* seed only the DOMAIN and density from the field: the world scalar
-           range is the wrong framing for an orbital field, but the colour map
-           is the XFEditor's business. pushing one in here overrode the
-           editor's own maps with an invented one. */
+      if (mvVolume) {
+        this->mvVolume = mvVolume;
+        mvPanel = new hs::MultiVariatePanel(mvVolume);
+        /* seed only the domain and density from the field; the colour map
+           stays the editor's */
         const hs::TransferFunction seed
-          = hs::makeSignedTransferFunction(orbGrid->valueRange,
-                                           orbGrid->bounds,
-                                           orbGrid->alphaGamma,
-                                           orbGrid->opacityScale,
-                                           orbGrid->domainScale);
+          = hs::makeSignedTransferFunction(mvVolume->valueRange,
+                                           mvVolume->bounds,
+                                           mvVolume->alphaGamma,
+                                           mvVolume->opacityScale,
+                                           mvVolume->domainScale);
         xf.absDomain   = seed.absDomain;
         xf.relDomain   = seed.relDomain;
         xf.baseDensity = seed.baseDensity;
-        /* the map the offline renders use, taken from the editor's own library
-           rather than rebuilt by hand */
         useBuiltinColorMap("cool_warm_extended");
-        filterDirty = true;
+        mixDirty = true;
       }
     }
 
     const BoundsData worldBounds;
-    hs::OrbGridVolume::SP orbGrid;
+    hs::MultiVariateVolume::SP mvVolume;
     /*! how many scenes '/' has dumped this session, so each gets its own .xf */
     int sceneDumpCount = 0;
     
@@ -147,29 +141,22 @@ namespace hm {
     {
       if (!uiIsOn) return;
       
-      if (orbPanel) {
-        /* this mode owns the volume, so the generic scalar-range and iso
-           controls below would only duplicate - and mis-frame - what the
-           panel already does */
-        /* the gizmo draws no window of its own, and without one it lands in
-           imgui's implicit Debug window - nowhere near the panel that owns the
-           domain. Give it a window and put the value axis directly under the
-           ramp, where the colours it labels actually are. run_ui leaves the
-           cursor just below its canvas and the canvas spans the full content
-           width, so the ticks line up with the ramp. */
+      if (mvPanel) {
+        /* the panel owns the volume ui; the gizmo gets its own window with
+           the value axis drawn directly under the ramp */
         ImGui::Begin("Transfer function");
         if (xfEditor.run_ui())
           xfDirty = true;
-        orbPanel->drawRuler();
+        mvPanel->drawRuler();
         ImGui::End();
-        if (orbPanel->run_ui()) {
-          xf.absDomain = orbPanel->domain();
-          xf.relDomain = orbPanel->relDomain();
-          xf.baseDensity = orbPanel->baseDensity();
+        if (mvPanel->run_ui()) {
+          xf.absDomain = mvPanel->domain();
+          xf.relDomain = mvPanel->relDomain();
+          xf.baseDensity = mvPanel->baseDensity();
           xfDirty = true;
         }
-        if (orbPanel->filterCommitted())
-          filterDirty = true;
+        if (mvPanel->mixCommitted())
+          mixDirty = true;
         return;
       }
 
@@ -239,14 +226,49 @@ namespace hm {
     }
     
     /*! this gets called when the user presses a key on the keyboard ... */
-    /*! Print an hsOffline command line that reproduces exactly what is on
-        screen: the same data, the same camera, and the same look.
+    /*! ':channels=' when the weights are all 0/1, else ':weights=', plus the
+        reduction options that differ from the defaults */
+    std::string mixUrlOptions(const hs::ChannelMix &mix) const
+    {
+      std::string names, weights;
+      bool binary = true, all = true;
+      for (size_t c=0;c<mix.weights.size();c++) {
+        const float w = mix.weights[c];
+        binary &= (w == 0.f || w == 1.f);
+        all    &= (w == 1.f);
+        if (w == 1.f && c < mvVolume->channelNames.size())
+          names += (names.empty() ? "" : ",") + mvVolume->channelNames[c];
+        char b[32]; snprintf(b,sizeof(b),"%s%g",c ? "," : "",w);
+        weights += b;
+      }
+      std::string opt;
+      if (!binary || names.empty()) opt += ":weights=" + weights;
+      else if (!all)                opt += ":channels=" + names;
+      if (mix.reduction != hs::Reduction::Magnitude)
+        opt += std::string(":reduction=") + hs::reductionName(mix.reduction);
+      if (mix.reduction == hs::Reduction::Component)
+        opt += ":component=" + std::to_string(mix.component);
+      if (mix.reduction == hs::Reduction::Dot) {
+        char b[96];
+        snprintf(b,sizeof(b),":direction=%g,%g,%g",
+                 mix.direction.x,mix.direction.y,mix.direction.z);
+        opt += b;
+      }
+      return opt;
+    }
 
-        The transfer function is written out and referenced with -xf rather than
-        re-derived from url options: the colour map, the domain and the density
-        are all live editor state, and there is no set of url options that
-        reconstructs an edited map. The orbital channel selection *is* a url
-        option, so that is appended to the field's url. */
+    static std::string stripMixOptions(std::string url)
+    {
+      for (const char *key : { ":channels=", ":weights=", ":reduction=",
+                               ":component=", ":direction=" })
+        for (size_t p; (p = url.find(key)) != std::string::npos; )
+          url.erase(p,url.find(':',p+1) == std::string::npos
+                    ? std::string::npos : url.find(':',p+1)-p);
+      return url;
+    }
+
+    /*! print an hsOffline command line that reproduces what is on screen; the
+        transfer function goes to a .xf file, the channel mix into the url */
     void dumpSceneConfig()
     {
       hs::Camera cam;
@@ -259,22 +281,8 @@ namespace hm {
       snprintf(xfName,sizeof(xfName),"scene_%03d.xf",sceneDumpCount);
       xf.save(xfName);
 
-      /* the channel selection, as ':channels=' understands it */
-      std::string chanOpt;
-      if (orbGrid && !orbGrid->channelNames.empty() && orbPanel) {
-        const hs::ChannelFilter &f = orbPanel->getFilter();
-        std::string names;
-        size_t on = 0;
-        for (size_t c=0;c<orbGrid->channelNames.size();c++)
-          if (f.channelMask & (1u<<c)) {
-            if (!names.empty()) names += ",";
-            names += orbGrid->channelNames[c];
-            on++;
-          }
-        /* the .orbg loader has no spelling for an empty selection */
-        if (on > 0 && on != orbGrid->channelNames.size())
-          chanOpt = ":channels=" + names;
-      }
+      std::string mixOpt;
+      if (mvVolume && mvPanel) mixOpt = mixUrlOptions(mvPanel->getMix());
 
       const owl::common::vec2i sz = getWindowSize();
       std::cout << "\n#hs: ---- scene " << sceneDumpCount
@@ -283,9 +291,10 @@ namespace hm {
       for (auto &a : fromCL.contentArgs) {
         const bool isField
           = a.find(".orbg") != std::string::npos
-          || a.find("orbgrid://") != std::string::npos;
-        std::cout << " \\\n    \"" << a
-                  << (isField ? chanOpt : std::string()) << "\"";
+          || a.find("orbgrid://") != std::string::npos
+          || a.find("multivariate://") != std::string::npos;
+        std::cout << " \\\n    \""
+                  << (isField ? stripMixOptions(a)+mixOpt : a) << "\"";
       }
       std::cout << " \\\n    --camera "
                 << cam.vp.x << " " << cam.vp.y << " " << cam.vp.z << "  "
@@ -404,9 +413,9 @@ namespace hm {
         accumDirty = true;
       }
 
-      if (filterDirty && orbPanel) {
-        renderer->setChannelFilter(orbPanel->getFilter());
-        filterDirty = false;
+      if (mixDirty && mvPanel) {
+        renderer->setChannelMix(mvPanel->getMix());
+        mixDirty = false;
         accumDirty = true;
       }
 
@@ -493,10 +502,10 @@ namespace hm {
     VolumeScatterPanel *scatterPanel = 0;
 #endif
     bool accumDirty = true;
-    /*! non-null only when the scene has an orbital-current grid field; when
-        it is set the panel replaces the generic volume/iso ui entirely */
-    hs::OrbitalPanel *orbPanel = nullptr;
-    bool filterDirty = false;
+    /*! set when the scene has a multi-variate volume; the panel then
+        replaces the generic volume/iso ui */
+    hs::MultiVariatePanel *mvPanel = nullptr;
+    bool mixDirty = false;
     RenderEngineInterface *const renderer;
     hs::mpi::Comm *world;
 
@@ -524,12 +533,9 @@ namespace hm {
 
     void loadXF() {
       xf.load(fromCL.xfFileName);
-      /* an orbital field takes only the DOMAIN and density from the file and
-         keeps the editor's own map (see useBuiltinColorMap): a .xf written by
-         make_xf.py carries a hand-built ramp, and pushing it in here made the
-         gizmo open on a map that is not one of its own. Every other scene gets
-         the file's colour map, as before. */
-      if (!orbPanel)
+      /* a multi-variate field keeps the editor's own colour map and takes only
+         the domain and density from the file */
+      if (!mvPanel)
         xfEditor.setColorAndAlpha((const owl::common::vec4f*)xf.colorMap.data(),
                                   xf.colorMap.size());
       xfDirty = true;
@@ -976,19 +982,18 @@ int main(int ac, char **av)
     exit(0);
   }
 
-  /* an orbital-current grid field takes over the volume ui and the default
-     transfer function, so find one if the scene has one; the head node has no
-     partitions of its own, and in that case both simply stay off */
-  hs::OrbGridVolume::SP orbGrid;
+  /* a multi-variate volume takes over the volume ui and the default transfer
+     function; the head node has no partitions, so there it stays off */
+  hs::MultiVariateVolume::SP mvVolume;
   if (localPartitions)
     for (auto part : localPartitions->myPartitions)
-      if (part && !part->orbGrids.empty()) {
-        orbGrid = part->orbGrids[0];
+      if (part && !part->multiVariates.empty()) {
+        mvVolume = part->multiVariates[0];
         break;
       }
 
 #if HS_IMGUI
-  Viewer viewer(worldBounds,renderer,&world,orbGrid);
+  Viewer viewer(worldBounds,renderer,&world,mvVolume);
 
   // viewer.show();
   viewer.enableFlyMode();
@@ -1053,15 +1058,15 @@ int main(int ac, char **av)
     xf.load(fromCL.xfFileName);
     renderer->setTransferFunction(xf);
     renderer->resetAccumulation();
-  } else if (orbGrid) {
+  } else if (mvVolume) {
     /* the stock default is opaque white over the whole domain, which on a
        field that is nonzero nearly everywhere is just a white wall */
     renderer->setTransferFunction
-      (hs::makeSignedTransferFunction(orbGrid->valueRange,
-                                      orbGrid->bounds,
-                                      orbGrid->alphaGamma,
-                                      orbGrid->opacityScale,
-                                      orbGrid->domainScale));
+      (hs::makeSignedTransferFunction(mvVolume->valueRange,
+                                      mvVolume->bounds,
+                                      mvVolume->alphaGamma,
+                                      mvVolume->opacityScale,
+                                      mvVolume->domainScale));
     renderer->resetAccumulation();
   }
 
@@ -1096,37 +1101,22 @@ int main(int ac, char **av)
     exit(0);
   }
   
-  /* exercise the filter path before rendering: every channel off, then every
-     channel back on. The mask ends identical to where it started, so anything
-     that differs afterwards is state that a filter change corrupted. */
-  if (fromCL.toggleCycles != 0 && orbGrid) {
-    hs::ChannelFilter f;
+  if (fromCL.toggleCycles != 0 && mvVolume) {
+    hs::ChannelMix mix = mvVolume->mix;
     for (int c=0;c<abs(fromCL.toggleCycles);c++) {
-      /* drop ONE channel, the way a user ticking a box does. Clearing every
-         channel instead empties every macro-cell, which is a different (and
-         more forgiving) path than the one that actually gets exercised.
-         A negative count keeps the mask UNCHANGED through the cycle: same
-         number of commits and frames, no filter change, so it isolates what
-         the extra frames alone do from what a filter change does. */
-      f.channelMask = (fromCL.toggleCycles < 0)
-        ? orbGrid->channelMask
-        : (orbGrid->channelMask & ~1u);
-      f.channelDirty = true;
-      renderer->setChannelFilter(f);
-      /* a frame is what actually drives the commit down into barney */
+      if (fromCL.toggleCycles > 0) mix.weights[0] = 0.f;
+      mix.dirty = true;
+      renderer->setChannelMix(mix);
       renderer->renderFrame();
-      f.channelMask = orbGrid->channelMask;
-      f.channelDirty = true;
-      renderer->setChannelFilter(f);
+      mix = mvVolume->mix;
+      mix.dirty = true;
+      renderer->setChannelMix(mix);
       renderer->renderFrame();
     }
-    /* the frames above were rendered with the filter half-way through the
-       cycle; without this they would accumulate into the one being compared
-       and the test would fail on its own book-keeping rather than on the
-       renderer's */
+    /* keep the half-way frames out of the accumulated image */
     renderer->resetAccumulation();
     std::cout << "#hs: completed " << fromCL.toggleCycles
-              << " filter toggle cycles" << std::endl;
+              << " channel toggle cycles" << std::endl;
   }
 
 #if 1

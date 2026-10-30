@@ -7,10 +7,10 @@ set(SOURCES
   main.cpp
 )
 
-# the orbital-field side panel; imgui-only, so it is added per target below
-set(ORBITAL_PANEL_SOURCES
-  OrbitalPanel.h
-  OrbitalPanel.cpp
+# the multi-variate field side panel; imgui-only, so it is added per target below
+set(MULTIVARIATE_PANEL_SOURCES
+  MultiVariatePanel.h
+  MultiVariatePanel.cpp
 )
 
 # set(TFE_SOURCES
@@ -92,7 +92,7 @@ endif()
 
 # ------------------------------------------------------------------
 if (HS_IMGUI)
-  add_executable(hsViewer ${SOURCES} ${ORBITAL_PANEL_SOURCES})
+  add_executable(hsViewer ${SOURCES} ${MULTIVARIATE_PANEL_SOURCES})
   target_link_libraries(hsViewer
     PUBLIC
     hayStack
