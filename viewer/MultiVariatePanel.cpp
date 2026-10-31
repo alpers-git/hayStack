@@ -147,6 +147,15 @@ namespace hs {
     return -1;
   }
 
+  std::vector<char> MultiVariatePanel::loadedLabels() const
+  {
+    std::vector<char> loaded(labelOn.size(),0);
+    if (volume->channelLabels.empty()) return loaded;
+    for (int c : volume->loadedChannels)
+      for (int l : volume->channelLabels[c]) loaded[l] = 1;
+    return loaded;
+  }
+
   void MultiVariatePanel::drawFileChannels()
   {
     if (!ImGui::CollapsingHeader("Load from file",ImGuiTreeNodeFlags_DefaultOpen))
@@ -200,6 +209,10 @@ namespace hs {
                 *sizeof(float)/1e9);
     ImGui::BeginDisabled(picked.empty() || picked == volume->loadedChannels);
     if (ImGui::Button("Load")) {
+      /* an orbital coming into memory starts on, or its pairs would stay hidden */
+      const std::vector<char> loaded = loadedLabels();
+      for (size_t l=0;l<labelOn.size();l++)
+        if (!loaded[l]) labelOn[l] = 1;
       pending = picked;
       updateWeights(pending);
       mix.dirty = true;
@@ -210,28 +223,32 @@ namespace hs {
   bool MultiVariatePanel::drawLabelGroups()
   {
     bool changed = false;
-    std::vector<char> loaded(labelOn.size(),0);
-    for (int c : volume->loadedChannels)
-      for (int l : volume->channelLabels[c]) loaded[l] = 1;
+    const std::vector<char> loaded = loadedLabels();
     for (int g=0;g<(int)volume->groupNames.size();g++) {
       ImGui::PushID(g);
-      bool all = true;
+      bool any = false, all = true;
       for (size_t l=0;l<labelOn.size();l++)
-        if (volume->labelGroup[l] == g && loaded[l]) all &= (labelOn[l] != 0);
+        if (volume->labelGroup[l] == g && loaded[l]) {
+          any = true;
+          all &= (labelOn[l] != 0);
+        }
+      all &= any;
       const bool open = ImGui::TreeNode(volume->groupNames[g].c_str());
       ImGui::SameLine();
+      ImGui::BeginDisabled(!any);
       if (ImGui::Checkbox("##all",&all)) {
         for (size_t l=0;l<labelOn.size();l++)
-          if (volume->labelGroup[l] == g) labelOn[l] = all;
+          if (volume->labelGroup[l] == g && loaded[l]) labelOn[l] = all;
         changed = true;
       }
+      ImGui::EndDisabled();
       if (open) {
         bool first = true;
         for (size_t l=0;l<labelOn.size();l++) {
           if (volume->labelGroup[l] != g) continue;
           if (!first) ImGui::SameLine();
           first = false;
-          bool on = labelOn[l];
+          bool on = labelOn[l] && loaded[l];
           ImGui::BeginDisabled(!loaded[l]);
           if (ImGui::Checkbox(volume->labelNames[l].c_str(),&on)) {
             labelOn[l] = on;

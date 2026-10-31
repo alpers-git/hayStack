@@ -52,6 +52,8 @@ namespace hs {
     bool drawChannelRows();
     void drawFileChannels();
     int  pairChannel(int labelA, int labelB) const;
+    /*! by label, whether any loaded channel uses it */
+    std::vector<char> loadedLabels() const;
 
     /*! recomputes mix.weights for these file channels from the switches */
     void updateWeights(const std::vector<int> &channels);
