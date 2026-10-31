@@ -10,8 +10,8 @@
 namespace hs {
   namespace loader {
 
-    /*! loads a .orbg file (orbital-current vectors per channel on a dense
-        grid) as a multi-variate volume with 3-component channels */
+    /*! loads a .orbg file (per-channel orbital-current vectors on a dense grid)
+        as a 3-component multi-variate volume; ':load=' limits what is read */
     struct OrbGridFromFile : public LoadableContent {
       OrbGridFromFile(const ResourceSpecifier &data, int thisPartID);
       static void create(DataLoader *loader, const ResourceSpecifier &dataURL);

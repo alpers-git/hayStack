@@ -64,6 +64,8 @@ namespace hm {
     void setTransferFunction(const hs::TransferFunction &xf) override;
     void setIsoValues(const std::vector<float> &values) override;
     void setChannelMix(const hs::ChannelMix &mix) override;
+    void setLoadedChannels(const std::vector<int> &channels,
+                           const hs::ChannelMix &mix) override;
     void setVolumeScatterSettings(const hs::VolumeScatterSettings &settings) override;
     hs::VolumeScatterSettings getVolumeScatterSettings() const override;
     

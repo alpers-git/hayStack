@@ -58,6 +58,8 @@ namespace hm {
         beyond the number of surfaces we have are ignored. */
     void setIsoValues(const std::vector<float> &values);
     void setChannelMix(const hs::ChannelMix &mix);
+    void setLoadedChannels(const std::vector<int> &channels,
+                           const hs::ChannelMix &mix);
       
     // void renderAll();
     void renderMiniScene(mini::Scene::SP miniScene);
@@ -106,9 +108,12 @@ namespace hm {
     /*! one barney "multiVariateGrid" field and volume per multi-variate volume */
     anari::Volume create(const hs::MultiVariateVolume::SP &mv);
     void setMixParameters(anari::SpatialField field, const hs::ChannelMix &mix);
+    void setChannelParameters(anari::SpatialField field,
+                              const hs::MultiVariateVolume &mv);
 
     /*! kept so a new channel mix can be pushed without rebuilding the scene */
     std::vector<anari::SpatialField> multiVariateFields;
+    std::vector<hs::MultiVariateVolume::SP> multiVariateVolumes;
 
     using Surfaces = std::vector<anari::Surface>;
     Surfaces create(const hs::SphereSet &content);

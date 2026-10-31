@@ -3,6 +3,7 @@
 
 #include "hayMaker/HayMaker.h"
 #include "hayStack/loader/DataLoader.h"
+#include "hayStack/loader/MultiVariateContent.h"
 #include "hayStack/loader/RAWVolumeContent.h"
 #if HS_IMGUI
 # include "owlViewer/OWLViewer.h"
@@ -15,6 +16,7 @@
 #include "stb/stb_image.h"
 #include "stb/stb_image_write.h"
 #if HS_MPI
+#include <algorithm>
 #include <unistd.h>
 #endif
 namespace hm {
@@ -75,6 +77,9 @@ namespace hm {
     /*! toggle channel 0 off and on this many times before rendering (negative:
         re-push the same mix); the image must match one rendered without it */
     int  toggleCycles = 0;
+    /*! swap to these channels after a first frame; the image must match
+        loading them directly */
+    std::string reloadChannels;
     std::string envMapFileName;
     /*! initial iso-values, harvested from the 'gpuIso=' key of the
         data URLs; one UI slider gets created per entry */
@@ -242,6 +247,11 @@ namespace hm {
         weights += b;
       }
       std::string opt;
+      if (mvVolume->numChannels < mvVolume->fileChannels) {
+        opt += ":load=";
+        for (size_t c=0;c<mvVolume->channelNames.size();c++)
+          opt += (c ? "," : "") + mvVolume->channelNames[c];
+      }
       if (!binary || names.empty()) opt += ":weights=" + weights;
       else if (!all)                opt += ":channels=" + names;
       if (mix.reduction != hs::Reduction::Magnitude)
@@ -259,7 +269,7 @@ namespace hm {
 
     static std::string stripMixOptions(std::string url)
     {
-      for (const char *key : { ":channels=", ":weights=", ":reduction=",
+      for (const char *key : { ":load=", ":channels=", ":weights=", ":reduction=",
                                ":component=", ":direction=" })
         for (size_t p; (p = url.find(key)) != std::string::npos; )
           url.erase(p,url.find(':',p+1) == std::string::npos
@@ -410,6 +420,14 @@ namespace hm {
       if (isoDirty) {
         renderer->setIsoValues(isoValues);
         isoDirty = false;
+        accumDirty = true;
+      }
+
+      if (mvPanel && mvPanel->loadRequested()) {
+        renderer->setLoadedChannels(mvPanel->pendingChannels(),mvPanel->getMix());
+        mvPanel->channelsLoaded();
+        xf.absDomain = mvPanel->domain();
+        xfDirty = true;
         accumDirty = true;
       }
 
@@ -786,6 +804,8 @@ int main(int ac, char **av)
       loader.defaultRadius = std::stof(av[++i]);
     } else if (arg == "--toggle-cycles") {
       fromCL.toggleCycles = std::stoi(av[++i]);
+    } else if (arg == "--reload-channels") {
+      fromCL.reloadChannels = av[++i];
     } else if (arg == "--measure") {
       fromCL.measure = true;
     } else if (arg == "-o") {
@@ -1117,6 +1137,24 @@ int main(int ac, char **av)
     renderer->resetAccumulation();
     std::cout << "#hs: completed " << fromCL.toggleCycles
               << " channel toggle cycles" << std::endl;
+  }
+
+  if (!fromCL.reloadChannels.empty() && mvVolume) {
+    renderer->renderFrame();
+    std::vector<int> channels;
+    for (auto &name : hs::loader::splitCommas(fromCL.reloadChannels)) {
+      auto &names = mvVolume->fileChannelNames;
+      auto it = std::find(names.begin(),names.end(),name);
+      if (it == names.end())
+        throw std::runtime_error("no channel '"+name+"' in this file");
+      channels.push_back(int(it-names.begin()));
+    }
+    std::sort(channels.begin(),channels.end());
+    hs::ChannelMix mix = mvVolume->mix;
+    mix.weights.assign(channels.size(),1.f);
+    mix.dirty = true;
+    renderer->setLoadedChannels(channels,mix);
+    renderer->resetAccumulation();
   }
 
 #if 1

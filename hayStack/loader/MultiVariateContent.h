@@ -10,6 +10,8 @@
 namespace hs {
   namespace loader {
 
+    std::vector<std::string> splitCommas(const std::string &s);
+
     /*! extra channel-name spellings a loader accepts in 'channels=' */
     typedef std::function<bool(const std::string &name,
                                const std::string &token)> NameMatch;

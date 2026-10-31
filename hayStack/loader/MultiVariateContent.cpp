@@ -10,7 +10,7 @@
 namespace hs {
   namespace loader {
 
-    static std::vector<std::string> splitCommas(const std::string &s)
+    std::vector<std::string> splitCommas(const std::string &s)
     {
       std::vector<std::string> out;
       std::stringstream ss(s);
@@ -93,6 +93,7 @@ namespace hs {
 
       MultiVariateVolume::SP vol = MultiVariateVolume::create();
       vol->numChannels   = (int)files.size();
+      vol->fileChannels  = vol->numChannels;
       vol->numComponents = data.get_int("components",1);
       if (vol->numComponents != 1 && vol->numComponents != 3)
         throw std::runtime_error("#hs.mv: 'components' must be 1 or 3");

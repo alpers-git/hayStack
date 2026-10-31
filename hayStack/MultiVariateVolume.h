@@ -5,9 +5,13 @@
 
 #include "hayStack/HayStack.h"
 #include "hayStack/TransferFunction.h"
+#include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <string>
+#include <thread>
 #include <vector>
 
 /*! \file MultiVariateVolume.h multi-variate volumes
@@ -72,6 +76,22 @@ namespace hs {
     int                      numComponents = 1;
     std::vector<std::string> channelNames;
 
+    /*! channels in the source file; numChannels counts the loaded ones, and
+        loadedChannels says which file channel each of those is */
+    int                      fileChannels  = 0;
+    std::vector<std::string> fileChannelNames;
+    std::vector<int>         loadedChannels;
+
+    /*! optional: replaces the loaded channels with these file channels */
+    std::function<void(MultiVariateVolume &,const std::vector<int> &)> loadChannels;
+
+    /*! optional: the labels each file channel is made of, e.g. the two orbitals
+        of a pair, with labelGroup[l] indexing groupNames */
+    std::vector<std::string>      labelNames;
+    std::vector<int>              labelGroup;
+    std::vector<std::string>      groupNames;
+    std::vector<std::vector<int>> channelLabels;
+
     /*! optional: peak |channel| per channel, and the exact peak magnitude of
         every 0/1 channel subset, indexed by its bit mask */
     std::vector<float>       channelPeak;
@@ -90,8 +110,64 @@ namespace hs {
     size_t numVoxels() const
     { return (size_t)dims.x*(size_t)dims.y*(size_t)dims.z; }
 
-    /*! upper bound on |reduced value| under a mix; exact when all enabled
-        channels share one weight and subsetPeak covers them, 0 if unknown */
+    /*! largest |reduced value| over the voxels under a block of mixed values */
+    float blockPeak(const float *v, size_t numFloats, const ChannelMix &m) const
+    {
+      float peak = 0.f;
+      if (numComponents == 1) {
+        for (size_t i=0;i<numFloats;i++) peak = std::max(peak,std::fabs(v[i]));
+      } else if (m.reduction == Reduction::Component) {
+        for (size_t i=m.component;i<numFloats;i+=3)
+          peak = std::max(peak,std::fabs(v[i]));
+      } else if (m.reduction == Reduction::Dot) {
+        for (size_t i=0;i<numFloats;i+=3)
+          peak = std::max(peak,std::fabs(v[i]*m.direction.x+v[i+1]*m.direction.y
+                                         +v[i+2]*m.direction.z));
+      } else {
+        for (size_t i=0;i<numFloats;i+=3)
+          peak = std::max(peak,v[i]*v[i]+v[i+1]*v[i+1]+v[i+2]*v[i+2]);
+        peak = std::sqrt(peak);
+      }
+      return peak;
+    }
+
+    /*! exact peak of the reduced value over all voxels, by re-mixing on the
+        host; negative when this process does not hold the channel data */
+    float scanPeak(const ChannelMix &m) const
+    {
+      const size_t voxels = numVoxels();
+      const size_t perChannel = voxels*numComponents;
+      if (voxels == 0 || channelData.size() < perChannel*numChannels) return -1.f;
+      std::vector<int> enabled;
+      for (int c=0;c<numChannels && c<(int)m.weights.size();c++)
+        if (m.weights[c] != 0.f) enabled.push_back(c);
+
+      const size_t block = 1<<16;
+      std::atomic<size_t> next { 0 };
+      const int numThreads = std::max(1,(int)std::thread::hardware_concurrency());
+      std::vector<float> peaks(numThreads,0.f);
+      auto work = [&](int t) {
+        std::vector<float> sum(block*numComponents);
+        for (size_t v; (v = next.fetch_add(block)) < voxels; ) {
+          const size_t n = std::min(block,voxels-v)*numComponents;
+          std::fill_n(sum.begin(),n,0.f);
+          for (int c : enabled) {
+            const float  w = m.weights[c];
+            const float *x = channelData.data()+c*perChannel+v*numComponents;
+            for (size_t i=0;i<n;i++) sum[i] += w*x[i];
+          }
+          peaks[t] = std::max(peaks[t],blockPeak(sum.data(),n,m));
+        }
+      };
+      std::vector<std::thread> threads;
+      for (int t=1;t<numThreads;t++) threads.emplace_back(work,t);
+      work(0);
+      for (auto &t : threads) t.join();
+      return *std::max_element(peaks.begin(),peaks.end());
+    }
+
+    /*! peak of |reduced value| under a mix: from subsetPeak when it covers the
+        mix, else a scan of the data, else an upper bound; 0 if unknown */
     float peakFor(const ChannelMix &m) const
     {
       float scale = 1.f;
@@ -107,8 +183,11 @@ namespace hs {
         uniform = (w == shared);
         mask |= (1ull<<c);
       }
-      if (uniform && mask < subsetPeak.size())
-        return scale*std::fabs(shared)*subsetPeak[mask];
+      if (uniform && m.reduction == Reduction::Magnitude
+          && mask < subsetPeak.size())
+        return std::fabs(shared)*subsetPeak[mask];
+      const float scanned = scanPeak(m);
+      if (scanned >= 0.f) return scanned;
       float sum = 0.f;
       for (int c=0;c<numChannels && c<(int)channelPeak.size();c++)
         sum += std::fabs(c < (int)m.weights.size() ? m.weights[c] : 1.f)

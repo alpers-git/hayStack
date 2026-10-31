@@ -21,6 +21,10 @@ namespace hm {
     /*! re-set the channel mix of every multi-variate volume; only pushed
         when the caller marks it dirty */
     virtual void setChannelMix(const hs::ChannelMix &mix) {}
+    /*! swap which file channels the multi-variate volumes hold; mix.weights
+        has to match the new set */
+    virtual void setLoadedChannels(const std::vector<int> &channels,
+                                   const hs::ChannelMix &mix) {}
     virtual void setVolumeScatterSettings(const hs::VolumeScatterSettings &settings) {}
     virtual hs::VolumeScatterSettings getVolumeScatterSettings() const { return {}; }
     

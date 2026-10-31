@@ -1226,6 +1226,33 @@ namespace hm {
   }
 
 
+  void AnariDeviceRenderer::setLoadedChannels(const std::vector<int> &channels,
+                                              const hs::ChannelMix &mix)
+  {
+    for (size_t i=0;i<multiVariateFields.size();i++) {
+      auto field = multiVariateFields[i];
+      auto &mv   = multiVariateVolumes[i];
+      if (!mv->loadChannels) continue;
+      if (mv->loadedChannels != channels) mv->loadChannels(*mv,channels);
+      setChannelParameters(field,*mv);
+      setMixParameters(field,mix);
+      anari::commitParameters(anari.device,field);
+    }
+  }
+
+  void AnariDeviceRenderer::setChannelParameters(anari::SpatialField field,
+                                                 const hs::MultiVariateVolume &mv)
+  {
+    /* captured with a no-op deleter: the volume owns the data, and a plain
+       shared array would be copied as soon as this handle is released */
+    anari::setAndReleaseParameter
+      (anari.device, field, "channels",
+       anari::newArray1D(anari.device,mv.channelData.data(),
+                         [](const void *,const void *) {},nullptr,
+                         mv.channelData.size()));
+    anari::setParameter(anari.device, field, "numChannels", mv.numChannels);
+  }
+
   void AnariDeviceRenderer::setMixParameters(anari::SpatialField field,
                                              const hs::ChannelMix &mix)
   {
@@ -1245,8 +1272,7 @@ namespace hm {
     if (!mv) return {};
     auto field
       = anari::newObject<anari::SpatialField>(anari.device,"multiVariateGrid");
-    anari::setParameterArray1D(anari.device, field, "channels",
-                               mv->channelData.data(), mv->channelData.size());
+    setChannelParameters(field,*mv);
     anari::setParameter(anari.device, field, "dims",
                         anari::math::int3(mv->dims.x,mv->dims.y,mv->dims.z));
     anari::setParameter(anari.device, field, "gridOrigin",
@@ -1257,11 +1283,11 @@ namespace hm {
                         anari::math::float3(mv->gridSpacing.x,
                                             mv->gridSpacing.y,
                                             mv->gridSpacing.z));
-    anari::setParameter(anari.device, field, "numChannels", mv->numChannels);
     anari::setParameter(anari.device, field, "numComponents", mv->numComponents);
     setMixParameters(field,mv->mix);
     anari::commitParameters(anari.device, field);
     multiVariateFields.push_back(field);
+    multiVariateVolumes.push_back(mv);
 
     auto volume = anari::newObject<anari::Volume>(anari.device,
                                                   "transferFunction1D");

@@ -229,6 +229,13 @@ namespace hm {
       dev->setChannelMix(mix);
   }
   
+  void HayMaker::setLoadedChannels(const std::vector<int> &channels,
+                                   const hs::ChannelMix &mix)
+  {
+    for (auto dev : perDevice)
+      dev->setLoadedChannels(channels,mix);
+  }
+
   void HayMaker::setVolumeScatterSettings(const hs::VolumeScatterSettings &settings)
   {
     for (auto dev : perDevice)

@@ -30,6 +30,7 @@ namespace hm {
 #endif
      SET_ISO,
      SET_CHANNEL_MIX,
+     SET_LOADED_CHANNELS,
      MAX_VALID_COMMANDS
     } CommandTag;
   const char *commandNames[]
@@ -47,6 +48,7 @@ namespace hm {
 #endif
      "SET_ISO",
      "SET_CHANNEL_MIX",
+     "SET_LOADED_CHANNELS",
   };
 
   
@@ -105,6 +107,7 @@ namespace hm {
 #endif
     void cmd_setISO();
     void cmd_setChannelMix();
+    void cmd_setLoadedChannels();
     void cmd_setShadeMode();
     void cmd_setNodeSelection();
     void cmd_screenShot();
@@ -465,6 +468,41 @@ namespace hm {
     renderer->setChannelMix(mix);
   }
 
+  void MPIRenderEngine::setLoadedChannels(const std::vector<int> &channels,
+                                          const hs::ChannelMix &mix)
+  {
+    int cmd = SET_LOADED_CHANNELS;
+    sendToWorkers(cmd);
+    sendToWorkers(channels);
+    int reduction = (int)mix.reduction;
+    int dirty     = mix.dirty ? 1 : 0;
+    sendToWorkers(mix.weights);
+    sendToWorkers(reduction);
+    sendToWorkers(mix.component);
+    sendToWorkers(mix.direction);
+    sendToWorkers(dirty);
+    sendEndOfMessage();
+    if (passThrough)
+      passThrough->setLoadedChannels(channels,mix);
+  }
+
+  void WorkerLoop::cmd_setLoadedChannels()
+  {
+    std::vector<int> channels;
+    hs::ChannelMix mix;
+    int reduction = 0, dirty = 0;
+    fromMaster(channels);
+    fromMaster(mix.weights);
+    fromMaster(reduction);
+    fromMaster(mix.component);
+    fromMaster(mix.direction);
+    fromMaster(dirty);
+    checkEndOfMessage();
+    mix.reduction = (hs::Reduction)reduction;
+    mix.dirty     = dirty != 0;
+    renderer->setLoadedChannels(channels,mix);
+  }
+
   void WorkerLoop::cmd_setISO()
   {
     // ------------------------------------------------------------------
@@ -642,6 +680,9 @@ namespace hm {
         break;
       case SET_CHANNEL_MIX:
         cmd_setChannelMix();
+        break;
+      case SET_LOADED_CHANNELS:
+        cmd_setLoadedChannels();
         break;
       case SET_LIGHTS:
         cmd_setLights();

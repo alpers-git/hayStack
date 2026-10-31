@@ -10,8 +10,8 @@
 
 namespace hs {
 
-  /*! side panel for a multi-variate volume: the transfer-function domain in
-      the field's own units, and the channel mix applied before classification */
+  /*! side panel for a multi-variate volume: the transfer-function domain and
+      the channel mix, with one drop-down per label group for labelled channels */
   struct MultiVariatePanel {
     MultiVariatePanel(const MultiVariateVolume::SP &volume);
 
@@ -23,6 +23,12 @@ namespace hs {
     bool mixCommitted() const { return committed; }
 
     const ChannelMix &getMix() const { return mix; }
+
+    /*! file channels the user asked to load; the viewer hands them to the
+        renderer, with getMix(), and then calls channelsLoaded() */
+    bool loadRequested() const { return !pending.empty(); }
+    const std::vector<int> &pendingChannels() const { return pending; }
+    void channelsLoaded();
 
     range1f domain() const
     {
@@ -42,9 +48,24 @@ namespace hs {
     void  fitDomain(float peak);
     const char *valueLabel() const;
 
+    bool drawLabelGroups();
+    bool drawChannelRows();
+    void drawFileChannels();
+    int  pairChannel(int labelA, int labelB) const;
+
+    /*! recomputes mix.weights for these file channels from the switches */
+    void updateWeights(const std::vector<int> &channels);
+
     MultiVariateVolume::SP volume;
     ChannelMix mix;
-    std::vector<float> restoreWeight;
+    /*! by file channel, so a channel keeps its state while it is not loaded */
+    std::vector<float> weight;
+    std::vector<char>  channelOn;
+    std::vector<char>  wanted;
+    std::vector<char>  labelOn;
+    std::vector<int>   pending;
+    /*! false: a channel needs all its labels on; true: any one is enough */
+    bool anyLabel  = false;
     bool committed = false;
 
     /*! the slider edits log10(absMax), bounded around the field's own peak */

@@ -28,6 +28,8 @@ namespace hm {
     void setTransferFunction(const TransferFunction &xf) override;
     void setIsoValues(const std::vector<float> &values) override;
     void setChannelMix(const hs::ChannelMix &mix) override;
+    void setLoadedChannels(const std::vector<int> &channels,
+                           const hs::ChannelMix &mix) override;
 #if HS_USE_MULTI_SCATTERING
     void setVolumeScatterSettings(const VolumeScatterSettings &settings) override;
 #endif
