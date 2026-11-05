@@ -91,13 +91,14 @@ namespace hm {
         (anari.device, anari.renderer,"background",
          (const anari::math::float4 &)bgColor);
     }
+    /* barney reads denoise from the renderer; on the frame it is ignored */
+    anari::setParameter(anari.device, anari.renderer, "denoise",
+                        (bool)hayMaker->globalRenderSettings.denoise);
     anari::commitParameters(anari.device, anari.renderer);
 
     anari.frame = anari::newObject<anari::Frame>(anari.device);
     anari::setParameter(anari.device, anari.frame, "world",    anari.world);
     anari::setParameter(anari.device, anari.frame, "renderer", anari.renderer);
-    anari::setParameter(anari.device, anari.frame, "denoise",
-                        (bool)hayMaker->globalRenderSettings.denoise);
 
     anari.camera = anari::newObject<anari::Camera>(anari.device, "perspective");
 
