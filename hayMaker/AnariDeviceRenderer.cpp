@@ -1130,6 +1130,17 @@ namespace hm {
   }
   
 
+  void AnariDeviceRenderer::setClipPlane(const ClipPlane &plane)
+  {
+    /* barney treats w <= -1e28 as "no plane" */
+    const anari::math::float4 cut
+      = plane.enabled
+      ? anari::math::float4(plane.N.x,plane.N.y,plane.N.z,plane.d)
+      : anari::math::float4(0.f,0.f,0.f,-1e30f);
+    anari::setParameter(anari.device,anari.renderer,"cutPlane",cut);
+    anari::commitParameters(anari.device,anari.renderer);
+  }
+
   /*! barney re-mixes the channels and rebuilds the majorants on commit */
   void AnariDeviceRenderer::setChannelMix(const hs::ChannelMix &mix)
   {

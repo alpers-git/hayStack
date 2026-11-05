@@ -9,6 +9,7 @@
 # include "owlViewer/OWLViewer.h"
 # include "owlViewer/XFEditor.h"
 # include "MultiVariatePanel.h"
+# include "ClipPlanePanel.h"
 #else
 # define STB_IMAGE_WRITE_IMPLEMENTATION 1
 # define STB_IMAGE_IMPLEMENTATION 1
@@ -84,6 +85,8 @@ namespace hm {
     /*! initial iso-values, harvested from the 'gpuIso=' key of the
         data URLs; one UI slider gets created per entry */
     std::vector<float> isoValues;
+    /*! '--clip-plane nx ny nz d': start clipped to dot(n,p)+d >= 0 */
+    ClipPlane clipPlane;
   };
   FromCL fromCL;
   
@@ -112,10 +115,13 @@ namespace hm {
            const hs::MultiVariateVolume::SP &mvVolume = {})
       : renderer(renderer),
         world(world),
-        worldBounds(worldBounds)
+        worldBounds(worldBounds),
+        clipPanel(worldBounds.spatial)
     {
       xf.absDomain = worldBounds.scalars;
       isoValues = fromCL.isoValues;
+      if (fromCL.clipPlane.enabled)
+        clipPanel.set(fromCL.clipPlane.N,fromCL.clipPlane.d);
       if (mvVolume) {
         this->mvVolume = mvVolume;
         mvPanel = new hs::MultiVariatePanel(mvVolume);
@@ -141,6 +147,18 @@ namespace hm {
     int sceneDumpCount = 0;
     
     bool uiIsOn = true;
+
+    /*! the collapsed clip-plane section under the transfer function */
+    void clipPlaneUi()
+    {
+      hs::Camera cam;
+      OWLViewer::getCameraOrientation((owl::common::vec3f&)cam.vp,
+                                      (owl::common::vec3f&)cam.vi,
+                                      (owl::common::vec3f&)cam.vu,
+                                      cam.fovy);
+      if (clipPanel.run_ui(normalize(cam.vi-cam.vp)))
+        clipDirty = true;
+    }
     
     void runImgui() override
     {
@@ -153,6 +171,7 @@ namespace hm {
         if (xfEditor.run_ui())
           xfDirty = true;
         mvPanel->drawRuler();
+        clipPlaneUi();
         ImGui::End();
         if (mvPanel->run_ui()) {
           xf.absDomain = mvPanel->domain();
@@ -211,6 +230,7 @@ namespace hm {
             isoDirty = true;
         }
       }
+      clipPlaneUi();
       ImGui::End();
     }
 
@@ -311,6 +331,10 @@ namespace hm {
                 << cam.vi.x << " " << cam.vi.y << " " << cam.vi.z << "  "
                 << cam.vu.x << " " << cam.vu.y << " " << cam.vu.z
                 << " -fovy " << cam.fovy;
+      const ClipPlane clip = clipPanel.plane();
+      if (clip.enabled)
+        std::cout << " \\\n    --clip-plane "
+                  << clip.N.x << " " << clip.N.y << " " << clip.N.z << " " << clip.d;
       std::cout << " \\\n    -res " << sz.x << " " << sz.y
                 << " -spp " << fromCL.spp
                 << " -xf " << xfName;
@@ -431,6 +455,12 @@ namespace hm {
         accumDirty = true;
       }
 
+      if (clipDirty) {
+        renderer->setClipPlane(clipPanel.plane());
+        clipDirty = false;
+        accumDirty = true;
+      }
+
       if (mixDirty && mvPanel) {
         renderer->setChannelMix(mvPanel->getMix());
         mixDirty = false;
@@ -509,6 +539,32 @@ namespace hm {
       accumDirty = true;
     }
 
+    /*! with the clip plane on, a left drag with ctrl held tilts it and one
+        with shift held slides it; any other drag still moves the camera */
+    void mouseMotion(const owl::common::vec2i &newPos) override
+    {
+      auto held = [&](int a, int b) {
+        return glfwGetKey(handle,a) == GLFW_PRESS
+          ||   glfwGetKey(handle,b) == GLFW_PRESS;
+      };
+      const bool ctrl  = held(GLFW_KEY_LEFT_CONTROL,GLFW_KEY_RIGHT_CONTROL);
+      const bool shift = held(GLFW_KEY_LEFT_SHIFT,GLFW_KEY_RIGHT_SHIFT);
+      if (!leftButton.isPressed || !clipPanel.isEnabled() || !(ctrl || shift)
+          || lastMousePosition == owl::common::vec2i(-1)) {
+        OWLViewer::mouseMotion(newPos);
+        return;
+      }
+      const owl::common::vec2i delta = newPos - lastMousePosition;
+      lastMousePosition = newPos;
+      hs::Camera cam;
+      OWLViewer::getCameraOrientation((owl::common::vec3f&)cam.vp,
+                                      (owl::common::vec3f&)cam.vi,
+                                      (owl::common::vec3f&)cam.vu,
+                                      cam.fovy);
+      clipPanel.drag(float(delta.x),float(delta.y),ctrl,cam,getWindowSize().y);
+      clipDirty = true;
+    }
+
     //    TransferFunction xf;
     bool xfDirty = true;
     /*! live iso-values, one per 'gpuIso=' iso-surface */
@@ -524,6 +580,8 @@ namespace hm {
         replaces the generic volume/iso ui */
     hs::MultiVariatePanel *mvPanel = nullptr;
     bool mixDirty = false;
+    hs::ClipPlanePanel clipPanel;
+    bool clipDirty = true;
     RenderEngineInterface *const renderer;
     hs::mpi::Comm *world;
 
@@ -788,6 +846,10 @@ int main(int ac, char **av)
     } else if (arg == "-env" || arg == "--env-map") {
       fromCL.envMapFileName = av[++i];
       loader.sharedLights.envMap = fromCL.envMapFileName;
+    } else if (arg == "--clip-plane") {
+      fromCL.clipPlane.N = get3f(av,i);
+      fromCL.clipPlane.d = std::stof(av[++i]);
+      fromCL.clipPlane.enabled = true;
     } else if (arg == "--no-denoiser" || arg == "--no-denoise") {
       fromCL.denoise = false;
     } else if (arg == "--num-frames") {
@@ -1072,6 +1134,8 @@ int main(int ac, char **av)
   camera.vi = fromCL.camera.vi;
   camera.fovy = fromCL.camera.fovy;
   renderer->setCamera(camera);
+  if (fromCL.clipPlane.enabled)
+    renderer->setClipPlane(fromCL.clipPlane);
   
   if (fromCL.xfFileName.length() > 0) {
     hs::TransferFunction xf;

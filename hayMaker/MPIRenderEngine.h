@@ -30,6 +30,7 @@ namespace hm {
     void setChannelMix(const hs::ChannelMix &mix) override;
     void setLoadedChannels(const std::vector<int> &channels,
                            const hs::ChannelMix &mix) override;
+    void setClipPlane(const ClipPlane &plane) override;
 #if HS_USE_MULTI_SCATTERING
     void setVolumeScatterSettings(const VolumeScatterSettings &settings) override;
 #endif

@@ -31,6 +31,7 @@ namespace hm {
      SET_ISO,
      SET_CHANNEL_MIX,
      SET_LOADED_CHANNELS,
+     SET_CLIP_PLANE,
      MAX_VALID_COMMANDS
     } CommandTag;
   const char *commandNames[]
@@ -49,6 +50,7 @@ namespace hm {
      "SET_ISO",
      "SET_CHANNEL_MIX",
      "SET_LOADED_CHANNELS",
+     "SET_CLIP_PLANE",
   };
 
   
@@ -108,6 +110,7 @@ namespace hm {
     void cmd_setISO();
     void cmd_setChannelMix();
     void cmd_setLoadedChannels();
+    void cmd_setClipPlane();
     void cmd_setShadeMode();
     void cmd_setNodeSelection();
     void cmd_screenShot();
@@ -503,6 +506,24 @@ namespace hm {
     renderer->setLoadedChannels(channels,mix);
   }
 
+  void MPIRenderEngine::setClipPlane(const ClipPlane &plane)
+  {
+    int cmd = SET_CLIP_PLANE;
+    sendToWorkers(cmd);
+    sendToWorkers(plane);
+    sendEndOfMessage();
+    if (passThrough)
+      passThrough->setClipPlane(plane);
+  }
+
+  void WorkerLoop::cmd_setClipPlane()
+  {
+    ClipPlane plane;
+    fromMaster(plane);
+    checkEndOfMessage();
+    renderer->setClipPlane(plane);
+  }
+
   void WorkerLoop::cmd_setISO()
   {
     // ------------------------------------------------------------------
@@ -683,6 +704,9 @@ namespace hm {
         break;
       case SET_LOADED_CHANNELS:
         cmd_setLoadedChannels();
+        break;
+      case SET_CLIP_PLANE:
+        cmd_setClipPlane();
         break;
       case SET_LIGHTS:
         cmd_setLights();

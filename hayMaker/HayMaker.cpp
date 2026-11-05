@@ -248,6 +248,12 @@ namespace hm {
       return {};
     return perDevice[0]->volumeScatterSettings;
   }
+
+  void HayMaker::setClipPlane(const ClipPlane &plane)
+  {
+    for (auto dev : perDevice)
+      dev->setClipPlane(plane);
+  }
   
 }
 

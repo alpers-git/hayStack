@@ -7,6 +7,7 @@
 #include "hayMaker/TextureLibrary.h"
 #include "hayMaker/MaterialLibrary.h"
 #include "hayStack/TransferFunction.h"
+#include "hayMaker/RenderEngineInterface.h"
 
 namespace hs {
   struct NanoVDBVolume;
@@ -60,7 +61,8 @@ namespace hm {
     void setChannelMix(const hs::ChannelMix &mix);
     void setLoadedChannels(const std::vector<int> &channels,
                            const hs::ChannelMix &mix);
-      
+    void setClipPlane(const ClipPlane &plane);
+
     // void renderAll();
     void renderMiniScene(mini::Scene::SP miniScene);
     anari::Group render(const mini::Object::SP &miniObject);

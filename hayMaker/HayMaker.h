@@ -68,7 +68,8 @@ namespace hm {
                            const hs::ChannelMix &mix) override;
     void setVolumeScatterSettings(const hs::VolumeScatterSettings &settings) override;
     hs::VolumeScatterSettings getVolumeScatterSettings() const override;
-    
+    void setClipPlane(const ClipPlane &plane) override;
+
     /*! go over all input content, and 'render' this into an
         anari::world; later renderFrame()'s can then simply use that
         frame with updated camera */

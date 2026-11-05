@@ -7,10 +7,13 @@ set(SOURCES
   main.cpp
 )
 
-# the multi-variate field side panel; imgui-only, so it is added per target below
-set(MULTIVARIATE_PANEL_SOURCES
+# the multi-variate field and clip-plane side panels; imgui-only, so they are
+# added per target below
+set(PANEL_SOURCES
   MultiVariatePanel.h
   MultiVariatePanel.cpp
+  ClipPlanePanel.h
+  ClipPlanePanel.cpp
 )
 
 # set(TFE_SOURCES
@@ -92,7 +95,7 @@ endif()
 
 # ------------------------------------------------------------------
 if (HS_IMGUI)
-  add_executable(hsViewer ${SOURCES} ${MULTIVARIATE_PANEL_SOURCES})
+  add_executable(hsViewer ${SOURCES} ${PANEL_SOURCES})
   target_link_libraries(hsViewer
     PUBLIC
     hayStack

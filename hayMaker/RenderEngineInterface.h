@@ -3,13 +3,22 @@
 
 #pragma once
 
+#include "hayMaker/common.h"
 #include "hayStack/TransferFunction.h"
 #include "hayStack/NanoVDBVolume.h"
 #include "hayStack/MultiVariateVolume.h"
 
 /* parallel renderer abstraction */
 namespace hm {
-  
+
+  /*! barney's cut plane: points with dot(N,p)+d >= 0 stay, the rest is cut
+      from volumes and geometry alike */
+  struct ClipPlane {
+    bool  enabled = false;
+    vec3f N { 1.f, 0.f, 0.f };
+    float d = 0.f;
+  };
+
   /*! base abstraction for any renderer - no matter whether it's a
       single node or multiple workers on the back */
   struct RenderEngineInterface {
@@ -27,7 +36,8 @@ namespace hm {
                                    const hs::ChannelMix &mix) {}
     virtual void setVolumeScatterSettings(const hs::VolumeScatterSettings &settings) {}
     virtual hs::VolumeScatterSettings getVolumeScatterSettings() const { return {}; }
-    
+    virtual void setClipPlane(const ClipPlane &plane) {}
+
     virtual void renderFrame() {}
     virtual void resize(const vec2i &fbSize, uint32_t *hostRgba) {}
     virtual void resetAccumulation() {}
